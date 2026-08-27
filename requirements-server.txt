@@ -1,0 +1,6 @@
+-r requirements.txt
+# Backend en contenedor: voz por WebSocket (STT + TTS) sin hardware de audio.
+# sounddevice queda fuera: no hay micrófono en un servidor headless.
+SpeechRecognition>=3.10
+edge-tts>=6.1
+numpy>=2.0

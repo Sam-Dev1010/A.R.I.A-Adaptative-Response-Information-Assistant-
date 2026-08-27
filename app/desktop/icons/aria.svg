@@ -1,0 +1,28 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512">
+  <defs>
+    <radialGradient id="glow" cx="50%" cy="50%" r="50%">
+      <stop offset="0%" stop-color="#ffd166" stop-opacity=".95"/>
+      <stop offset="45%" stop-color="#ffb000" stop-opacity=".9"/>
+      <stop offset="100%" stop-color="#ff7a1a" stop-opacity=".35"/>
+    </radialGradient>
+    <radialGradient id="bg" cx="50%" cy="42%" r="80%">
+      <stop offset="0%" stop-color="#08101c"/>
+      <stop offset="100%" stop-color="#010204"/>
+    </radialGradient>
+  </defs>
+  <rect width="512" height="512" rx="108" fill="url(#bg)"/>
+  <!-- anillo exterior -->
+  <circle cx="256" cy="256" r="196" fill="none" stroke="#ffb000" stroke-width="3" opacity=".35"/>
+  <circle cx="256" cy="256" r="176" fill="none" stroke="#ffd166" stroke-width="1.5" opacity=".22" stroke-dasharray="10 8"/>
+  <circle cx="256" cy="256" r="150" fill="none" stroke="#ffb000" stroke-width="5" opacity=".5"/>
+  <!-- meridianos del orbe -->
+  <g stroke="#ffd166" fill="none" opacity=".42">
+    <ellipse cx="256" cy="256" rx="150" ry="40" stroke-width="2"/>
+    <ellipse cx="256" cy="256" rx="40" ry="150" stroke-width="2"/>
+    <ellipse cx="256" cy="256" rx="150" ry="150" stroke-width="2.5" opacity=".6"/>
+  </g>
+  <!-- núcleo -->
+  <circle cx="256" cy="256" r="88" fill="url(#glow)"/>
+  <circle cx="256" cy="256" r="34" fill="#01030a"/>
+  <circle cx="256" cy="256" r="12" fill="#ffd166" opacity=".95"/>
+</svg>

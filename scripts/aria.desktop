@@ -1,0 +1,14 @@
+[Desktop Entry]
+Version=1.0
+Type=Application
+Name=A.R.I.A
+GenericName=Asistente personal
+GenericName[es]=Asistente personal
+Comment=Asistente personal con inteligencia neural y voz
+Comment[es]=Asistente personal con inteligencia neural y voz
+Exec=/home/samuel/A.R.I.A-main/scripts/aria-launcher.sh
+Icon=aria
+Terminal=false
+Categories=Utility;Accessibility;AudioVideo;
+Keywords=asistente;voz;neural;aria;inteligencia;
+StartupNotify=true

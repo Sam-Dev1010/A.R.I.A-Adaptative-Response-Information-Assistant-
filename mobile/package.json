@@ -1,0 +1,15 @@
+{
+  "name": "sia-movil",
+  "version": "2.0.0",
+  "description": "App móvil de SIA: interfaz de voz conectada al servidor de tu PC.",
+  "private": true,
+  "dependencies": {
+    "@capacitor/android": "^8.5.0",
+    "@capacitor/core": "^8.5.0"
+  },
+  "devDependencies": {
+    "@capacitor/assets": "^3.0.5",
+    "@capacitor/cli": "^8.5.0",
+    "typescript": "^7.0.2"
+  }
+}

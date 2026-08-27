@@ -1,0 +1,961 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="theme-color" content="#010204">
+<link rel="manifest" href="/static/manifest.json">
+<link rel="icon" type="image/svg+xml" href="/static/icono.svg">
+<title>A.R.I.A · AI CORE</title>
+<style>
+  :root {
+    --amber: #ffb000;
+    --amber-hi: #ffd166;
+    --orange: #ff7a1a;
+    --red: #ff4d4d;
+    --ink: rgba(226, 235, 248, .92);
+    --dim: rgba(160, 172, 196, .55);
+    --faint: rgba(160, 172, 196, .28);
+    --bg: #010204;
+  }
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  html, body { height: 100%; overflow: hidden; background: var(--bg); }
+  body {
+    font-family: "Segoe UI", system-ui, sans-serif;
+    color: var(--ink);
+    user-select: none;
+    cursor: default;
+  }
+  #scene { position: fixed; inset: 0; z-index: 0; display: block; }
+
+  /* ============ HUD genérico ============ */
+  .hud-label {
+    font-size: 9px; letter-spacing: 3px; text-transform: uppercase;
+    color: var(--faint);
+  }
+  .hud-value {
+    font-family: "Consolas", "Menlo", monospace;
+    font-size: 12px; letter-spacing: 1.5px; color: var(--amber);
+    text-shadow: 0 0 10px rgba(255,176,0,.35);
+  }
+  .dot {
+    display: inline-block; width: 6px; height: 6px; border-radius: 50%;
+    background: var(--amber); box-shadow: 0 0 8px var(--amber);
+    animation: pulse-dot 2.2s ease-in-out infinite; vertical-align: 1px;
+  }
+  @keyframes pulse-dot { 50% { opacity: .35; } }
+
+  /* esquinas del marco */
+  .corner { position: fixed; width: 46px; height: 46px; z-index: 2; pointer-events: none;
+    border: 1px solid rgba(255,176,0,.18); }
+  .tl { top: 14px; left: 14px;  border-right: none; border-bottom: none; }
+  .tr { top: 14px; right: 14px; border-left: none;  border-bottom: none; }
+  .bl { bottom: 14px; left: 14px;  border-right: none; border-top: none; }
+  .br { bottom: 14px; right: 14px; border-left: none;  border-top: none; }
+
+  /* ---- esquina superior izquierda: identidad ---- */
+  #identity {
+    position: fixed; top: 26px; left: 34px; z-index: 2; line-height: 1.9;
+  }
+  #identity .name {
+    font-size: 15px; font-weight: 300; letter-spacing: 8px; color: var(--amber-hi);
+    text-shadow: 0 0 16px rgba(255,176,0,.5);
+  }
+  #identity .online { font-size: 9px; letter-spacing: 3px; color: var(--dim); }
+  #identity .online b { color: var(--amber); font-weight: 600; margin-left: 6px; }
+
+  /* ---- esquina superior derecha: sistema ---- */
+  #system {
+    position: fixed; top: 26px; right: 34px; z-index: 2; text-align: right;
+    display: grid; grid-template-columns: auto auto; gap: 2px 14px; line-height: 1.75;
+  }
+  #system .hud-label { justify-self: start; }
+  #system .sys-head {
+    grid-column: 1 / -1; color: var(--amber-hi) !important;
+    letter-spacing: 5px; font-size: 10px !important; margin-bottom: 4px;
+  }
+
+  /* ---- controles de ventana (solo app escritorio) ---- */
+  #winBtns {
+    position: fixed; top: 18px; right: 24px; z-index: 5; display: none; gap: 8px;
+    pointer-events: auto;
+  }
+  #winBtns button {
+    width: 36px; height: 36px; border-radius: 6px; cursor: pointer;
+    background: rgba(1,4,8,.6); color: var(--dim); font-size: 14px;
+    border: 1px solid rgba(255,176,0,.18);
+    transition: all .2s;
+  }
+  #winBtns button:hover { color: var(--amber); border-color: var(--amber);
+    box-shadow: 0 0 14px rgba(255,176,0,.3); }
+  #winBtns .close:hover { color: var(--red); border-color: var(--red);
+    box-shadow: 0 0 14px rgba(255,77,77,.3); }
+  #dragStrip { position: fixed; top: 0; left: 0; right: 0; height: 44px; z-index: 4;
+    -webkit-app-region: drag; pointer-events: auto; }
+
+  /* ---- estado bajo el núcleo ---- */
+  #status {
+    position: fixed; left: 50%; bottom: 31%; transform: translateX(-50%);
+    font-size: 11px; font-weight: 600; letter-spacing: 9px; margin-left: 9px;
+    z-index: 2; color: var(--amber); text-transform: uppercase;
+    text-shadow: 0 0 14px currentColor; transition: opacity .4s;
+  }
+  #status.thinking { color: var(--orange); }
+  #status.offline  { color: var(--red); }
+  #status::before, #status::after {
+    content: ""; position: absolute; top: 50%; width: 42px; height: 1px;
+    background: linear-gradient(90deg, transparent, currentColor);
+  }
+  #status::before { right: calc(100% + 14px); }
+  #status::after  { left: calc(100% + 14px); transform: scaleX(-1); }
+
+  /* ---- lecturas alrededor del núcleo ---- */
+  .readout { position: fixed; z-index: 2; line-height: 1.7; transition: opacity .6s; }
+  .readout.r1 { left: calc(50% - min(30vw, 420px) - 140px); top: calc(46% - 120px); text-align: right; }
+  .readout.r2 { left: calc(50% + min(30vw, 420px) + 50px);  top: calc(46% - 150px); }
+  .readout.r3 { left: calc(50% - min(30vw, 420px) - 120px); top: calc(46% + 90px);  text-align: right; }
+  .readout.r4 { left: calc(50% + min(30vw, 420px) + 70px);  top: calc(46% + 60px); }
+
+  /* ---- respuesta de la IA ---- */
+  #aiResp {
+    position: fixed; left: 50%; bottom: 23%; transform: translateX(-50%);
+    width: min(720px, 86vw); z-index: 2; pointer-events: none;
+    opacity: 0; filter: blur(6px); transition: opacity .7s ease, filter .7s ease;
+  }
+  #aiResp.show { opacity: 1; filter: blur(0); }
+  #aiResp .who {
+    font-size: 9px; letter-spacing: 5px; color: var(--amber);
+    margin-bottom: 6px; display: flex; align-items: center; gap: 10px;
+  }
+  #aiResp .who::after { content: ""; flex: 1; height: 1px;
+    background: linear-gradient(90deg, rgba(255,176,0,.35), transparent); }
+  #aiResp .txt {
+    font-size: clamp(15px, 1.9vw, 19px); font-weight: 300; line-height: 1.65;
+    color: var(--ink); text-shadow: 0 0 18px rgba(255,176,0,.15);
+  }
+
+  /* ---- panel inferior ---- */
+  #panel {
+    position: fixed; left: 50%; bottom: 34px; transform: translateX(-50%);
+    width: min(760px, 92vw); z-index: 3; pointer-events: auto;
+    display: flex; align-items: center; gap: 14px;
+  }
+  .round-btn {
+    flex: 0 0 auto; width: 52px; height: 52px; border-radius: 50%;
+    border: 1px solid rgba(255,176,0,.35); background: rgba(1,4,8,.72);
+    color: var(--amber); font-size: 19px; cursor: pointer;
+    box-shadow: 0 0 18px rgba(255,176,0,.12), inset 0 0 14px rgba(255,176,0,.05);
+    transition: box-shadow .25s, color .25s, border-color .25s, transform .08s;
+  }
+  .round-btn:hover { box-shadow: 0 0 26px rgba(255,176,0,.4); border-color: var(--amber); }
+  .round-btn:active { transform: scale(.93); }
+  #micBtn.listening {
+    color: var(--amber-hi); border-color: var(--amber-hi);
+    box-shadow: 0 0 30px rgba(255,200,80,.55); animation: blink 1s steps(2) infinite;
+  }
+  @keyframes blink { 50% { opacity: .45; } }
+
+  #cmdWrap { flex: 1; position: relative; height: 52px; display: flex; align-items: center; }
+  #cmd {
+    width: 100%; height: 100%; padding: 0 18px;
+    background: rgba(1, 4, 8, .72);
+    border: 1px solid rgba(255,176,0,.22); border-radius: 2px;
+    color: var(--ink); font-size: 15px; font-weight: 300; letter-spacing: .4px;
+    outline: none; user-select: text;
+    transition: border-color .25s, box-shadow .25s;
+  }
+  #cmd::placeholder { color: var(--faint); letter-spacing: 2px; font-size: 13px; }
+  #cmd:focus { border-color: rgba(255,176,0,.55);
+    box-shadow: 0 0 22px rgba(255,176,0,.15), inset 0 0 18px rgba(255,176,0,.04); }
+
+  #hint {
+    position: fixed; left: 50%; bottom: 12px; transform: translateX(-50%);
+    font-size: 8px; letter-spacing: 3px; color: var(--faint); z-index: 2;
+    text-transform: uppercase; white-space: nowrap;
+  }
+  #dbg {
+    position: fixed; left: 50%; bottom: 96px; transform: translateX(-50%);
+    font-size: 9px; letter-spacing: 1px; color: rgba(160,172,196,.18); z-index: 2;
+    font-family: "Consolas", monospace; white-space: nowrap;
+  }
+
+  /* ---- zona clicable del núcleo (pulso ACTIVE) ---- */
+  #coreHit {
+    position: fixed; left: 50%; top: 46%; transform: translate(-50%, -50%);
+    width: min(38vmin, 380px); height: min(38vmin, 380px); border-radius: 50%;
+    z-index: 2; pointer-events: auto; cursor: pointer;
+  }
+
+  /* ---- secuencia de arranque ---- */
+  #boot {
+    position: fixed; inset: 0; z-index: 50; background: var(--bg);
+    display: grid; place-items: center;
+    transition: opacity .9s ease;
+  }
+  #boot.done { opacity: 0; pointer-events: none; }
+  #bootText {
+    font-family: "Consolas", monospace; font-size: 12px; letter-spacing: 2px;
+    color: rgba(255,176,0,.75); text-align: left; line-height: 2;
+  }
+  #bootText .ok::after { content: " [ OK ]"; color: rgba(255,209,102,.9); }
+
+  /* ---- responsive ---- */
+  @media (max-width: 900px) {
+    .readout { display: none; }
+    #status { bottom: 34%; }
+  }
+  @media (max-width: 620px) {
+    #identity { top: 20px; left: 20px; }
+    #identity .name { font-size: 12px; letter-spacing: 6px; }
+    #system { top: 20px; right: 20px; grid-template-columns: auto; }
+    #system .opt { display: none; }
+    #panel { bottom: 22px; gap: 10px; }
+    .round-btn { width: 46px; height: 46px; font-size: 17px; }
+    #dbg { display: none; }
+    #aiResp { bottom: 26%; }
+    #hint { display: none; }
+  }
+
+  /* ---- movimiento reducido ---- */
+  @media (prefers-reduced-motion: reduce) {
+    .dot, #micBtn.listening { animation: none; }
+    * { transition-duration: .01ms !important; }
+  }
+</style>
+</head>
+<body>
+<canvas id="scene"></canvas>
+
+<div id="dragStrip"></div>
+<div id="winBtns">
+  <button id="btnMin" title="Minimizar">─</button>
+  <button id="btnClose" class="close" title="Cerrar">✕</button>
+</div>
+
+<div class="corner tl"></div><div class="corner tr"></div>
+<div class="corner bl"></div><div class="corner br"></div>
+
+<!-- identidad -->
+<div id="identity">
+  <div class="name">A.R.I.A</div>
+  <div class="online"><span class="dot"></span>AI CORE<b id="linkStat">CONECTANDO</b></div>
+</div>
+
+<!-- sistema -->
+<div id="system">
+  <div class="hud-label sys-head">SYSTEM</div>
+  <div class="hud-label">CPU</div>     <div class="hud-value opt" id="stCpu">--%</div>
+  <div class="hud-label">MEMORY</div>  <div class="hud-value opt" id="stMem">--%</div>
+  <div class="hud-label">NETWORK</div> <div class="hud-value" id="stNet">--</div>
+</div>
+
+<!-- lecturas alrededor del núcleo -->
+<div class="readout r1"><div class="hud-label">CORE TEMP</div><div class="hud-value" id="roTemp">34.2°C</div></div>
+<div class="readout r2"><div class="hud-label">NEURAL ACTIVITY</div><div class="hud-value" id="roNeural">87%</div></div>
+<div class="readout r3"><div class="hud-label">SYSTEM LOAD</div><div class="hud-value" id="roLoad">23%</div></div>
+<div class="readout r4"><div class="hud-label">SIGNAL</div><div class="hud-value" id="roSignal">98%</div></div>
+
+<div id="coreHit"></div>
+<div id="status">INICIANDO…</div>
+
+<div id="aiResp"><div class="who">A.R.I.A</div><div class="txt"></div></div>
+
+<div id="panel">
+  <button id="micBtn" class="round-btn" title="Mantén pulsado para hablar">🎙</button>
+  <div id="cmdWrap">
+    <input id="cmd" autocomplete="off" spellcheck="false" placeholder="Pregúntame lo que sea…">
+  </div>
+  <button id="sendBtn" class="round-btn" title="Enviar">➤</button>
+</div>
+
+<div id="hint">VOZ LIBRE · PUSH PARA HABLAR · ESCRIBE Y ENTER · RESPUESTA POR ALTAVOZ</div>
+<div id="dbg"></div>
+
+<div id="boot"><pre id="bootText"></pre></div>
+
+<script src="qrc:///qtwebchannel/qwebchannel.js"></script>
+<script>
+"use strict";
+/* ================= puente con la app de escritorio ================= */
+let qtBridge = null;
+(function () {
+  if (window.qt && qt.webChannelTransport) {
+    new QWebChannel(qt.webChannelTransport, (channel) => {
+      qtBridge = channel.objects.sia;
+      document.getElementById("winBtns").style.display = "flex";
+    });
+  } else {
+    document.getElementById("dragStrip").style.display = "none";
+  }
+})();
+document.getElementById("btnMin").addEventListener("click", () => qtBridge && qtBridge.minimize());
+document.getElementById("btnClose").addEventListener("click", () => qtBridge && qtBridge.closeWindow());
+
+/* ================= referencias HUD ================= */
+const statusEl = document.getElementById("status");
+const linkEl = document.getElementById("linkStat");
+const micBtn = document.getElementById("micBtn");
+const respBox = document.getElementById("aiResp");
+const respTxt = respBox.querySelector(".txt");
+const hintEl = document.getElementById("hint");
+const dbgEl = document.getElementById("dbg");
+const stCpu = document.getElementById("stCpu");
+const stMem = document.getElementById("stMem");
+const stNet = document.getElementById("stNet");
+const roTemp = document.getElementById("roTemp");
+const roNeural = document.getElementById("roNeural");
+const roLoad = document.getElementById("roLoad");
+const roSignal = document.getElementById("roSignal");
+const HINT_DEFAULT = hintEl.textContent;
+
+/* ================= arranque tipo terminal ================= */
+const bootEl = document.getElementById("boot");
+const bootText = document.getElementById("bootText");
+const BOOT_LINES = [
+  "A.R.I.A KERNEL v4.2 ……………… [ OK ]",
+  "NEURAL CORE ONLINE ………… [ OK ]",
+  "AUDIO INTERFACE ……………… [ OK ]",
+  "LINK ESTABLISHED …………… [ OK ]",
+];
+let bootIdx = 0;
+const bootTimer = setInterval(() => {
+  if (bootIdx >= BOOT_LINES.length) {
+    clearInterval(bootTimer);
+    setTimeout(() => bootEl.classList.add("done"), 380);
+    return;
+  }
+  bootText.innerHTML += BOOT_LINES[bootIdx] + "\n";
+  bootIdx += 1;
+}, 340);
+
+/* ================= escena: núcleo holográfico ================= */
+const canvas = document.getElementById("scene");
+const ctx = canvas.getContext("2d");
+const REDUCED = matchMedia("(prefers-reduced-motion: reduce)").matches;
+let W = 0, H = 0, DPR = 1;
+function resize() {
+  DPR = Math.min(devicePixelRatio || 1, 1.5);
+  W = innerWidth; H = innerHeight;
+  canvas.width = W * DPR; canvas.height = H * DPR;
+  canvas.style.width = W + "px"; canvas.style.height = H + "px";
+  ctx.setTransform(DPR, 0, 0, DPR, 0, 0);
+}
+resize(); addEventListener("resize", resize);
+
+let aiState = "standby";
+const CFG = {
+  standby:   { speed: .25, glow: .45 },
+  listening: { speed: 2.4, glow: .95 },
+  thinking:  { speed: 5.5, glow: 1.0 },
+  speaking:  { speed: 3.0, glow: .85 },
+  offline:   { speed: .08, glow: .18 },
+};
+const STATUS_TEXT = {
+  standby: "EN ESPERA", listening: "ESCUCHANDO", thinking: "PROCESANDO",
+  speaking: "RESPONDIENDO", offline: "SIN ENLACE",
+};
+const anim = { speed: CFG.standby.speed, glow: CFG.standby.glow };
+let rot = 0, micLevel = 0;
+
+const particles = Array.from({ length: REDUCED ? 30 : 90 }, () => ({
+  a: Math.random() * Math.PI * 2,
+  r: .55 + Math.random() * .6,
+  s: (.15 + Math.random() * .5) * (Math.random() < .5 ? -1 : 1),
+  z: Math.random() * Math.PI * 2,
+}));
+const ripples = [];
+function ripple(x, y, strong) {
+  ripples.push({ x, y, r: 8, v: strong ? 7 : 4.5, a: strong ? .55 : .35 });
+}
+
+function drawScene() {
+  requestAnimationFrame(drawScene);
+  if (!W || !H) return;
+  const cfg = CFG[aiState];
+  anim.speed += (cfg.speed - anim.speed) * .04;
+  anim.glow += (cfg.glow - anim.glow) * .05;
+  rot += anim.speed * .012;
+
+  ctx.clearRect(0, 0, W, H);
+  const cx = W / 2, cy = H * .46;
+  const R = Math.min(W, H) * .21;
+  const t = performance.now();
+
+  const g = ctx.createRadialGradient(cx, cy, R * .2, cx, cy, Math.max(W, H) * .75);
+  g.addColorStop(0, "rgba(255,176,0," + (.08 * anim.glow).toFixed(3) + ")");
+  g.addColorStop(.55, "rgba(255,122,26,.03)");
+  g.addColorStop(1, "rgba(1,2,4,0)");
+  ctx.fillStyle = g;
+  ctx.fillRect(0, 0, W, H);
+
+  ctx.strokeStyle = "rgba(255,176,0,.04)";
+  ctx.lineWidth = 1;
+  ctx.beginPath();
+  for (let x = (cx % 80); x < W; x += 80) { ctx.moveTo(x, 0); ctx.lineTo(x, H); }
+  for (let y = 0; y < H; y += 80) { ctx.moveTo(0, y); ctx.lineTo(W, y); }
+  ctx.stroke();
+
+  for (let i = ripples.length - 1; i >= 0; i--) {
+    const rp = ripples[i];
+    rp.r += rp.v; rp.a *= .96;
+    if (rp.a < .01) { ripples.splice(i, 1); continue; }
+    ctx.beginPath(); ctx.arc(rp.x, rp.y, rp.r, 0, Math.PI * 2);
+    ctx.strokeStyle = "rgba(255,176,0," + rp.a.toFixed(3) + ")";
+    ctx.lineWidth = 1.4;
+    ctx.stroke();
+  }
+
+  const pulse = 1 + .02 * Math.sin(t / 420) + micLevel * .12;
+  const rings = [
+    { r: 1.06, dash: [26, 16], sp: 1.0, w: 1.6 },
+    { r: .92, dash: [5, 22], sp: -.65, w: 1.1 },
+    { r: 1.28, dash: [2, 30], sp: .45, w: .9 },
+    { r: .74, dash: [], sp: -.3, w: 1.0 },
+  ];
+  for (const ring of rings) {
+    ctx.beginPath();
+    ctx.setLineDash(ring.dash);
+    ctx.lineDashOffset = -rot * ring.sp * 40;
+    ctx.arc(cx, cy, ring.r * R * pulse, 0, Math.PI * 2);
+    ctx.strokeStyle = "rgba(255,176,0," + (.32 + .38 * anim.glow).toFixed(3) + ")";
+    ctx.lineWidth = ring.w;
+    ctx.stroke();
+  }
+  ctx.setLineDash([]);
+
+  /* ---- orbe de líneas: esfera wireframe que ondula con la voz ---- */
+  drawOrb(cx, cy, R * 1.16, t);
+
+  const SPOKES = 36;
+  for (let i = 0; i < SPOKES; i++) {
+    const ang = (i / SPOKES) * Math.PI * 2 + rot * .3;
+    const flick = .5 + .5 * Math.sin(i * 2.7 + t / (REDUCED ? 900 : 260));
+    if (flick < .55) continue;
+    const r1 = R * 1.12, r2 = R * (1.2 + .14 * flick);
+    ctx.beginPath();
+    ctx.moveTo(cx + Math.cos(ang) * r1, cy + Math.sin(ang) * r1);
+    ctx.lineTo(cx + Math.cos(ang) * r2, cy + Math.sin(ang) * r2);
+    ctx.strokeStyle = "rgba(255,209,102," + (.28 * flick * anim.glow).toFixed(3) + ")";
+    ctx.lineWidth = 1.2;
+    ctx.stroke();
+  }
+
+  const converge = aiState === "thinking" ? .55 : 0;
+  for (const p of particles) {
+    p.a += p.s * anim.speed * (REDUCED ? .002 : .004);
+    p.z += .03;
+    const rr = R * (p.r * (1 - converge) + .3 * converge) * pulse;
+    const tw = .5 + .5 * Math.sin(p.z);
+    ctx.beginPath();
+    ctx.arc(cx + Math.cos(p.a) * rr, cy + Math.sin(p.a) * rr, 1.1 + tw, 0, Math.PI * 2);
+    ctx.fillStyle = "rgba(255,200,110," + (.18 + .4 * tw * anim.glow).toFixed(3) + ")";
+    ctx.fill();
+  }
+
+  if (aiState === "listening" || aiState === "speaking") {
+    const bars = 64, base = R * .62;
+    for (let i = 0; i < bars; i++) {
+      const ang = (i / bars) * Math.PI * 2 - rot * .5;
+      const wob = Math.abs(Math.sin(i * 1.7 + t / 130));
+      const hgt = R * (.06 + micLevel * (.5 + wob * 1.4));
+      ctx.beginPath();
+      ctx.moveTo(cx + Math.cos(ang) * base, cy + Math.sin(ang) * base);
+      ctx.lineTo(cx + Math.cos(ang) * (base + hgt), cy + Math.sin(ang) * (base + hgt));
+      ctx.strokeStyle = "rgba(255,220,140," + (.25 + .45 * micLevel).toFixed(3) + ")";
+      ctx.lineWidth = 2;
+      ctx.stroke();
+    }
+  }
+
+  const beat = 1 + .05 * Math.sin(t / (aiState === "thinking" ? 160 : 520));
+  const coreR = R * .34 * beat;
+  const cg = ctx.createRadialGradient(cx, cy, 0, cx, cy, coreR);
+  cg.addColorStop(0, "rgba(255,230,180," + (.55 + .35 * anim.glow).toFixed(3) + ")");
+  cg.addColorStop(.35, "rgba(255,176,0," + (.28 + .3 * anim.glow).toFixed(3) + ")");
+  cg.addColorStop(1, "rgba(255,122,26,.02)");
+  ctx.beginPath(); ctx.arc(cx, cy, coreR, 0, Math.PI * 2);
+  ctx.fillStyle = cg; ctx.fill();
+
+  ctx.beginPath(); ctx.arc(cx, cy, R * .42 * pulse, 0, Math.PI * 2);
+  ctx.strokeStyle = "rgba(255,176,0," + (.4 + .4 * anim.glow).toFixed(3) + ")";
+  ctx.lineWidth = 1.4; ctx.stroke();
+
+  ctx.save();
+  ctx.translate(cx, cy);
+  ctx.rotate(-rot * .6);
+  ctx.beginPath();
+  for (let i = 0; i < 6; i++) {
+    const a = (i / 6) * Math.PI * 2;
+    const px = Math.cos(a) * R * .26, py = Math.sin(a) * R * .26;
+    if (i) ctx.lineTo(px, py); else ctx.moveTo(px, py);
+  }
+  ctx.closePath();
+  ctx.strokeStyle = "rgba(255,209,102," + (.35 + .3 * anim.glow).toFixed(3) + ")";
+  ctx.lineWidth = 1;
+  ctx.stroke();
+  ctx.restore();
+}
+requestAnimationFrame(drawScene);
+
+/* Nivel de voz que deforma el orbe: combina el micrófono del usuario
+   (habla) con la voz de A.R.I.A en reproducción (responde). */
+let userVoice = 0, ariaVoice = 0, orbReact = 0;
+function setUserVoice(v) { userVoice += (Math.min(1, v) - userVoice) * .35; }
+function setAriaVoice(v) { ariaVoice += (Math.min(1, v) - ariaVoice) * .35; }
+
+/* Orbe de líneas: esfera wireframe (paralelos + meridianos) en perspectiva
+   que se hace más grande y ondula más cuando el usuario habla (userVoice)
+   o A.R.I.A responde (ariaVoice). */
+function drawOrb(cx, cy, R0, t) {
+  const activo = Math.max(userVoice, ariaVoice);
+  orbReact += (activo - orbReact) * .12;
+  const theta = rot * .7;                 // rotación lenta
+  const tilt = Math.PI * .16;
+  const activado = Math.max(userVoice, ariaVoice) > .02;
+  const wobble = 1 + orbReact * .14;      // se expande con la voz
+  const RR = R0 * wobble;
+
+  const SIN = Math.sin, COS = Math.cos;
+  const proyeccion = (x, y, z) => {
+    // rotación alrededor de Y
+    const x1 = x * COS(theta) + z * SIN(theta);
+    const z1 = -x * SIN(theta) + z * COS(theta);
+    const y1 = y;
+    // inclinación alrededor de X
+    const y2 = y1 * COS(tilt) - z1 * SIN(tilt);
+    const z2 = y1 * SIN(tilt) + z1 * COS(tilt);
+    return [x1, y2, z2];
+  };
+
+  const op = (x, y, z) => {
+    const [px, py, pz] = proyeccion(x, y, z);
+    const pr = RR * 1.35;                       // factor de perspectiva
+    const f = pr / (pr + pz);
+    return [cx + px * f, cy + py * f, f];
+  };
+
+  // silueta del orbe: esfera translúcida tenue para que lea como un orbe
+  const silueta = ctx.createRadialGradient(cx, cy, RR * .2, cx, cy, RR * 1.02);
+  silueta.addColorStop(0, "rgba(255,150,40," + (.05 + .12 * activo).toFixed(3) + ")");
+  silueta.addColorStop(.7, "rgba(255,120,20,.03)");
+  silueta.addColorStop(1, "rgba(255,120,20," + (.10 + .2 * activo).toFixed(3) + ")");
+  ctx.beginPath();
+  ctx.arc(cx, cy, RR, 0, Math.PI * 2);
+  ctx.fillStyle = silueta;
+  ctx.fill();
+
+  // paralelos traseros (silueta tenue) para dar volumen
+  ctx.strokeStyle = "rgba(255,140,50,.08)";
+  ctx.lineWidth = 1;
+  ctx.beginPath();
+  ctx.arc(cx, cy, RR * .94, Math.PI * 1.05, Math.PI * 1.95);
+  ctx.stroke();
+
+  // meridianos (longitud): líneas verticales curvas
+  const M = 12, P = 30;
+  for (let i = 0; i < M; i++) {
+    const ph = (i / M) * Math.PI * 2;
+    ctx.beginPath();
+    for (let j = 0; j <= P; j++) {
+      const th = (j / P) * Math.PI;
+      let r = RR;
+      if (activado) r += Math.sin(th * 4 + t / (REDUCED ? 700 : 200) + i) * RR * .05 * activo;
+      const x = r * SIN(th) * COS(ph);
+      const y = r * COS(th);
+      const z = r * SIN(th) * SIN(ph);
+      const [px, py, f] = op(x, y, z);
+      if (j) ctx.lineTo(px, py); else ctx.moveTo(px, py);
+    }
+    ctx.strokeStyle = "rgba(255,190,90," + (.34 + .5 * activo * anim.glow).toFixed(3) + ")";
+    ctx.lineWidth = activo > .02 ? 1.6 : 1.1;
+    ctx.stroke();
+  }
+
+  // paralelos (latitud): líneas horizontales curvas
+  for (let k = 1; k < 7; k++) {
+    const th = (k / 7) * Math.PI;
+    const yBase = RR * COS(th);
+    const rad = RR * SIN(th);
+    ctx.beginPath();
+    for (let j = 0; j <= P; j++) {
+      const ph = (j / P) * Math.PI * 2;
+      let r = rad;
+      if (activado) r += Math.sin(ph * 3 + t / (REDUCED ? 800 : 260)) * RR * .05 * activo;
+      const x = r * COS(ph);
+      const y = yBase;
+      const z = r * SIN(ph);
+      const [px, py, f] = op(x, y, z);
+      if (j) ctx.lineTo(px, py); else ctx.moveTo(px, py);
+    }
+    ctx.strokeStyle = "rgba(255,190,90," + (.34 + .5 * activo * anim.glow).toFixed(3) + ")";
+    ctx.lineWidth = activo > .02 ? 1.6 : 1.1;
+    ctx.stroke();
+  }
+}
+
+function setState(s) {
+  if (!CFG[s]) return;
+  aiState = s;
+  statusEl.textContent = STATUS_TEXT[s];
+  statusEl.className = s;
+  micBtn.classList.toggle("listening", s === "listening");
+  ripple(W / 2, H * .46, false);
+  sfx.blip(s);
+}
+
+/* ================= estadísticas simuladas ================= */
+const sm = { cpu: 22, mem: 41, net: 120, temp: 34.2, neural: 87, load: 23, signal: 98 };
+function pasoStats() {
+  const activo = aiState === "thinking" || aiState === "speaking" || aiState === "listening";
+  const vivo = ws && ws.readyState === 1;
+  const hacia = (k, obj, paso) => { sm[k] += (obj - sm[k]) * paso; };
+  hacia("cpu", activo ? 46 : 19, .25);
+  hacia("mem", 43, .2);
+  hacia("net", vivo ? 118 : 4, .3);
+  hacia("temp", activo ? 41.5 : 34.2, .12);
+  hacia("neural", aiState === "thinking" ? 97 : activo ? 88 : 61, .18);
+  hacia("load", activo ? 52 : 21, .2);
+  hacia("signal", vivo ? 98 : 12, .3);
+  stCpu.textContent = sm.cpu.toFixed(0) + "%";
+  stMem.textContent = sm.mem.toFixed(0) + "%";
+  stNet.textContent = sm.net.toFixed(0) + " kb/s";
+  roTemp.textContent = sm.temp.toFixed(1) + "\u00b0C";
+  roNeural.textContent = sm.neural.toFixed(0) + "%";
+  roLoad.textContent = sm.load.toFixed(0) + "%";
+  roSignal.textContent = sm.signal.toFixed(0) + "%";
+}
+setInterval(pasoStats, 900);
+
+/* ================= sonido de interfaz (sintetizado) ================= */
+let audioCtx = null, unlocked = false;
+function asegurarCtx() {
+  if (!audioCtx) audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+  return audioCtx;
+}
+const sfx = {
+  tono(freq, dur, vol, type = "sine") {
+    if (!unlocked || REDUCED) return;
+    try {
+      const c = asegurarCtx();
+      if (c.state === "suspended") c.resume();
+      const o = c.createOscillator(), gn = c.createGain();
+      o.type = type; o.frequency.value = freq;
+      gn.gain.setValueAtTime(0, c.currentTime);
+      gn.gain.linearRampToValueAtTime(vol, c.currentTime + .015);
+      gn.gain.exponentialRampToValueAtTime(.0001, c.currentTime + dur);
+      o.connect(gn); gn.connect(c.destination);
+      o.start(); o.stop(c.currentTime + dur + .05);
+    } catch (_) { /* sin audio disponible */ }
+  },
+  blip(estado) {
+    if (estado === "listening") this.tono(720, .12, .05);
+    else if (estado === "thinking") this.tono(480, .16, .04, "triangle");
+    else if (estado === "speaking") this.tono(880, .1, .045);
+    else if (estado === "standby") this.tono(360, .09, .03);
+    else if (estado === "offline") this.tono(180, .3, .05, "sawtooth");
+  },
+  tick() { this.tono(1150, .07, .04, "square"); },
+};
+function unlockAudio() {
+  if (unlocked) return;
+  unlocked = true;
+  try { asegurarCtx().resume(); } catch (_) { /* nada */ }
+  if (audioCtx && audioCtx.state === "suspended") audioCtx.resume();
+  hintEl.textContent = HINT_DEFAULT;
+}
+window.addEventListener("pointerdown", unlockAudio);
+window.addEventListener("keydown", unlockAudio);
+document.getElementById("coreHit").addEventListener("click", () => {
+  sfx.tick();
+  ripple(innerWidth / 2, H * .46, true);
+});
+
+/* ================= respuesta en pantalla ================= */
+let hideTimer = 0;
+function mostrarRespuesta(texto) {
+  respTxt.textContent = texto;
+  respBox.classList.add("show");
+  clearTimeout(hideTimer);
+  hideTimer = setTimeout(() => respBox.classList.remove("show"), 14000);
+}
+function ocultarRespuestaProgramada() {
+  clearTimeout(hideTimer);
+  respBox.classList.remove("show");
+}
+
+/* ================= token de acceso remoto ================= */
+let authFallido = false;
+function pedirToken(motivo) {
+  authFallido = true;
+  if (document.getElementById("tokbox")) return;
+  const box = document.createElement("div");
+  box.id = "tokbox";
+  box.style.cssText = "position:fixed;inset:0;z-index:200;display:flex;align-items:center;justify-content:center;background:#010204;font-family:'Segoe UI',system-ui,sans-serif;";
+  const panel = document.createElement("div");
+  panel.style.cssText = "width:min(420px,88vw);padding:28px;border:1px solid rgba(255,176,0,.55);background:#06070a;color:#ffe3b3;box-shadow:0 0 60px rgba(255,176,0,.15);";
+  const titulo = document.createElement("div");
+  titulo.textContent = "A.R.I.A \u00b7 ACCESO REMOTO";
+  titulo.style.cssText = "letter-spacing:5px;color:#ffb000;margin-bottom:8px;";
+  const texto = document.createElement("div");
+  texto.textContent = (motivo ? motivo + " " : "") + "Escribe el token de acceso de tu servidor (.env \u2192 ACCESS_TOKEN).";
+  texto.style.cssText = "font-size:13px;line-height:1.5;margin-bottom:14px;color:#cbb691;";
+  const input = document.createElement("input");
+  input.id = "tokin"; input.type = "password"; input.placeholder = "token"; input.autocomplete = "off";
+  input.style.cssText = "width:100%;box-sizing:border-box;padding:12px;background:#010204;border:1px solid rgba(255,176,0,.55);color:#ffd9a0;font-size:16px;";
+  const boton = document.createElement("button");
+  boton.textContent = "ENTRAR";
+  boton.style.cssText = "margin-top:14px;width:100%;padding:12px;background:rgba(255,176,0,.1);border:1px solid #ffb000;color:#ffb000;letter-spacing:3px;font-weight:bold;cursor:pointer;";
+  const entrar = () => {
+    localStorage.setItem("sia.token", input.value.trim());
+    location.reload();
+  };
+  boton.onclick = entrar;
+  input.addEventListener("keydown", (e) => { if (e.key === "Enter") entrar(); });
+  panel.append(titulo, texto, input, boton);
+  box.appendChild(panel);
+  document.body.appendChild(box);
+  input.focus();
+}
+
+/* ================= enlace WebSocket ================= */
+let ws = null;
+let analyser = null, recorder = null, micBusy = false;
+let chunkBuf = [], speechChunks = [], capturing = false, lastSpeechAt = 0, captureStart = 0;
+let lockoutUntil = 0, threshold = .04, calibrating = true, calSamples = [], voicedStreak = 0;
+let headerChunk = null;
+
+function connect() {
+  const token = encodeURIComponent(localStorage.getItem("sia.token") || "");
+  ws = new WebSocket((location.protocol === "https:" ? "wss://" : "ws://") + location.host + "/ws/interface" + (token ? "?token=" + token : ""));
+  ws.onopen = () => { linkEl.textContent = "ACTIVO"; setState("standby"); };
+  ws.onclose = () => {
+    linkEl.textContent = "CA\u00cdDO";
+    setState("offline");
+    if (!authFallido) {
+      /* En la app móvil: sin ajuste manual, prueba el siguiente servidor */
+      if (window.Servidor && Servidor.rotar) Servidor.rotar();
+      setTimeout(connect, 3000);
+    }
+  };
+  ws.onmessage = (ev) => {
+    const msg = JSON.parse(ev.data);
+    if (msg.type === "thinking") { setState("thinking"); }
+    else if (msg.type === "speaking") { setState("speaking"); }
+    else if (msg.type === "response") { mostrarRespuesta(msg.text); }
+    else if (msg.type === "audio_chunk") { enqueueAudio(msg.audio, !!msg.last, msg.mime); }
+    else if (msg.type === "audio_end") {
+      if (!capturing) { setState("standby"); lockoutUntil = performance.now() + 700; }
+    } else if (msg.type === "error") {
+      if (msg.message && msg.message.includes("token")) {
+        pedirToken(msg.message);
+        setState("offline");
+      } else if (msg.message && msg.message.includes("silencio")) {
+        setState("standby");
+      } else {
+        mostrarRespuesta(msg.message || "Error interno");
+        setState("standby");
+      }
+    }
+  };
+}
+
+/* Reproduce los fragmentos de audio en cuanto llegan, sin esperas. */
+let playQueue = [], playing = false;
+let ariaAnalyser = null;   // mide la voz de A.R.I.A para animar el orbe
+let ariaLevelTimer = 0;
+function trackAriaLevel() {
+  if (!ariaAnalyser) return;
+  const v = Math.min(1, currentLevelRms(ariaAnalyser) * 4);
+  setAriaVoice(v > .018 ? v : 0);
+  ariaLevelTimer = requestAnimationFrame(trackAriaLevel);
+}
+function enqueueAudio(b64, last, mime) {
+  playQueue.push({ url: "data:" + (mime || "audio/mpeg") + ";base64," + b64, last: last });
+  pumpAudio();
+}
+function pumpAudio() {
+  if (playing || playQueue.length === 0) return;
+  const item = playQueue.shift();
+  playing = true;
+  lockoutUntil = performance.now() + 400;
+  const done = () => {
+    playing = false;
+    if (ariaAnalyser) { cancelAnimationFrame(ariaLevelTimer); setAriaVoice(0); ariaAnalyser = null; }
+    if (item.last && playQueue.length === 0 && !capturing) {
+      setState("standby");
+      lockoutUntil = performance.now() + 700;
+    }
+    pumpAudio();
+  };
+  if (audioCtx && audioCtx.state === "running") {
+    fetch(item.url).then(r => r.arrayBuffer()).then(buf =>
+      audioCtx.decodeAudioData(buf, (audioBuf) => {
+        const src = audioCtx.createBufferSource();
+        src.buffer = audioBuf;
+        // Enrutar la voz por un analizador para que el orbe "sienta" el habla
+        if (!playing) return;
+        ariaAnalyser = audioCtx.createAnalyser();
+        ariaAnalyser.fftSize = 2048;
+        const gain = audioCtx.createGain(); gain.gain.value = .9;
+        src.connect(ariaAnalyser); ariaAnalyser.connect(gain); gain.connect(audioCtx.destination);
+        src.onended = done;
+        src.start();
+        trackAriaLevel();
+      }, () => fallbackPlay(item.url, done))
+    ).catch(() => fallbackPlay(item.url, done));
+  } else fallbackPlay(item.url, done);
+}
+function fallbackPlay(url, done) {
+  const el = new Audio(url);
+  el.onended = done;
+  el.play().catch(() => {
+    hintEl.textContent = "TOCA LA PANTALLA PARA ACTIVAR EL AUDIO";
+    done();
+  });
+}
+
+async function initAudio() {
+  try {
+    const stream = await navigator.mediaDevices.getUserMedia({
+      audio: { echoCancellation: true, noiseSuppression: true, autoGainControl: true },
+    });
+    micBusy = stream.getAudioTracks().some(t => t.enabled && t.readyState === "live");
+    asegurarCtx();
+    const src = audioCtx.createMediaStreamSource(stream);
+    analyser = audioCtx.createAnalyser();
+    analyser.fftSize = 2048;
+    analyser.smoothingTimeConstant = .25;
+    src.connect(analyser);
+
+    const mime = MediaRecorder.isTypeSupported("audio/webm;codecs=opus")
+      ? "audio/webm;codecs=opus" : "audio/webm";
+    recorder = new MediaRecorder(stream, { mimeType: mime });
+    recorder.ondataavailable = (ev) => {
+      if (ev.data.size === 0) return;
+      // Solo el primer chunk trae la cabecera WebM; se guarda aparte y se
+      // antepone a cada captura, o el blob sale corrupto para ffmpeg.
+      if (!headerChunk) { headerChunk = ev.data; return; }
+      if (capturing) speechChunks.push(ev.data);
+      else {
+        chunkBuf.push(ev.data);
+        if (chunkBuf.length > 4) chunkBuf.shift();
+      }
+    };
+    recorder.start(250);
+    setState("standby");
+    requestAnimationFrame(vadLoop);
+  } catch (err) {
+    hintEl.textContent = "SIN MICR\u00d3FONO \u00b7 USA EL CAMPO DE TEXTO";
+    setState("offline");
+  }
+}
+
+function currentRms() {
+  const buf = new Uint8Array(analyser.fftSize);
+  analyser.getByteTimeDomainData(buf);
+  let sum = 0;
+  for (let i = 0; i < buf.length; i++) { const v = (buf[i] - 128) / 128; sum += v * v; }
+  return Math.sqrt(sum / buf.length);
+}
+
+function currentLevelRms(source) {
+  if (!source) return 0;
+  const buf = new Uint8Array(source.fftSize);
+  source.getByteTimeDomainData(buf);
+  let sum = 0;
+  for (let i = 0; i < buf.length; i++) { const v = (buf[i] - 128) / 128; sum += v * v; }
+  return Math.sqrt(sum / buf.length);
+}
+
+function vadLoop() {
+  if (!analyser) return;
+  const rms = currentRms();
+  micLevel += (Math.min(1, rms * 6) - micLevel) * .2;
+  setUserVoice(rms);
+  if (calibrating) {
+    calSamples.push(rms);
+    if (calSamples.length > 60) {
+      calSamples.sort((a, b) => a - b);
+      const med = calSamples[Math.floor(calSamples.length / 2)];
+      threshold = Math.max(.04, med * 4);
+      calibrating = false;
+    }
+    requestAnimationFrame(vadLoop);
+    return;
+  }
+  dbgEl.textContent =
+    (micBusy ? "MIC OCUPADO" : "MIC OK") +
+    " \u00b7 RMS " + rms.toFixed(3) +
+    " \u00b7 UMBRAL " + threshold.toFixed(3) +
+    " \u00b7 WS " + (ws && ws.readyState === 1 ? "ACTIVO" : "CA\u00cdDO") +
+    " \u00b7 " + (calibrating ? "CALIBRANDO" : "CAL \u2713");
+
+  const now = performance.now();
+  const voiced = rms > threshold;
+  voicedStreak = voiced ? voicedStreak + 1 : 0;
+
+  if (aiState === "standby") {
+    if (voicedStreak >= 4 && now > lockoutUntil) {
+      capturing = true;
+      captureStart = now;
+      speechChunks = [...chunkBuf];
+      chunkBuf = [];
+      lastSpeechAt = now;
+      setState("listening");
+    }
+  } else if (aiState === "listening") {
+    if (voiced) lastSpeechAt = now;
+    if (now - lastSpeechAt > 500 || now - captureStart > 10000) finalize();
+  }
+  requestAnimationFrame(vadLoop);
+}
+
+function finalize() {
+  if (!capturing) return;
+  capturing = false;
+  if (speechChunks.length === 0) { setState("standby"); return; }
+  setState("thinking");
+  const parts = headerChunk ? [headerChunk, ...speechChunks] : speechChunks;
+  const blob = new Blob(parts, { type: recorder.mimeType });
+  speechChunks = [];
+  const reader = new FileReader();
+  reader.onload = () => {
+    if (ws && ws.readyState === 1) {
+      ws.send(JSON.stringify({ type: "audio", data: reader.result.split(",")[1] }));
+    } else {
+      setState("offline");
+    }
+  };
+  reader.readAsDataURL(blob);
+}
+
+/* push-to-talk manual */
+micBtn.addEventListener("pointerdown", () => {
+  if (!analyser) return;
+  capturing = true; captureStart = performance.now();
+  speechChunks = [...chunkBuf]; chunkBuf = [];
+  lastSpeechAt = performance.now(); setState("listening");
+});
+micBtn.addEventListener("pointerup", finalize);
+
+/* entrada de texto */
+const cmdInput = document.getElementById("cmd");
+const sendBtn = document.getElementById("sendBtn");
+function enviarTexto() {
+  const texto = cmdInput.value.trim();
+  if (!texto || !ws || ws.readyState !== 1 || capturing) return;
+  cmdInput.value = "";
+  ocultarRespuestaProgramada();
+  setState("thinking");
+  ws.send(JSON.stringify({ type: "text", data: texto }));
+}
+sendBtn.addEventListener("click", enviarTexto);
+cmdInput.addEventListener("keydown", (e) => {
+  if (e.key === "Enter") { e.preventDefault(); enviarTexto(); }
+});
+
+connect();
+initAudio();
+</script>
+</body>
+</html>

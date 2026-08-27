@@ -1,0 +1,4 @@
+-r requirements.txt
+# App de escritorio (FASE 12): ventana nativa con la interfaz futurista.
+PyQt6>=6.6
+PyQt6-WebEngine>=6.6

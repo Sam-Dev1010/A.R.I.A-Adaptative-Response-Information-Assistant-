@@ -1,0 +1,25 @@
+# Git y entornos locales
+.git
+.gitignore
+.venv/
+venv/
+__pycache__/
+*.pyc
+.pytest_cache/
+.ruff_cache/
+
+# Secretos: NUNCA dentro de la imagen (van por env_file / variables)
+.env
+
+# Datos y artefactos que no van en la imagen
+data/
+mobile/
+firmware/
+scripts/
+tests/
+APKS/
+*.apk
+
+# Basura del sistema
+.DS_Store
+Thumbs.db

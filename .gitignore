@@ -1,0 +1,26 @@
+# Entorno y secretos
+.env
+
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+venv/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+htmlcov/
+
+# Datos locales generados por la app
+data/*
+!data/.gitkeep
+
+# IDEs
+.idea/
+.vscode/
+*.swp
+
+# SO
+.DS_Store

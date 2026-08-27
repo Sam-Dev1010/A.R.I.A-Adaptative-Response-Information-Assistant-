@@ -1,0 +1,8 @@
+-r requirements.txt
+# Voz (FASES 5-7): micrófono (sounddevice), transcripción (SpeechRecognition)
+# y síntesis neuronal (edge-tts). Instala además el reproductor que prefieras:
+# mpv, ffplay (ffmpeg), aplay o paplay.
+SpeechRecognition>=3.10
+sounddevice>=0.5
+edge-tts>=6.1
+numpy>=2.0

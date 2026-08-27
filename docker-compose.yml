@@ -1,0 +1,25 @@
+services:
+  sia:
+    build: .
+    image: sia-backend:latest
+    container_name: sia
+    restart: unless-stopped
+    ports:
+      - "8000:8000"
+    env_file:
+      - .env
+    environment:
+      # Zona horaria para la charla espontánea (silencio nocturno por horas locales)
+      TZ: America/Bogota
+      # Dentro del contenedor SIA siempre escucha en 0.0.0.0:8000
+      HOST: 0.0.0.0
+      PORT: "8000"
+    volumes:
+      # Memoria persistente (SQLite) y audio temporal: sobrevive a recrear el contenedor
+      - ./data:/app/data
+    # Límites opcionales (descomenta para acotar recursos en un servidor compartido):
+    # deploy:
+    #   resources:
+    #     limits:
+    #       cpus: "1.5"
+    #       memory: 512M

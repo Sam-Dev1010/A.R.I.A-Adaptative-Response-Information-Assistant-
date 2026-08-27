@@ -1,0 +1,19 @@
+{
+  "name": "SIA · Asistente personal",
+  "short_name": "SIA",
+  "description": "Asistente personal de IA con voz, inspirado en JARVIS.",
+  "start_url": "/",
+  "display": "standalone",
+  "orientation": "portrait",
+  "background_color": "#01030a",
+  "theme_color": "#01030a",
+  "lang": "es",
+  "icons": [
+    {
+      "src": "/static/icono.svg",
+      "sizes": "any",
+      "type": "image/svg+xml",
+      "purpose": "any"
+    }
+  ]
+}
