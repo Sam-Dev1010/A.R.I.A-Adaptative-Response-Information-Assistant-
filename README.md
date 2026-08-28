@@ -384,6 +384,43 @@ BOTÓN        D4 ↔ GND   (sin resistencia, INPUT_PULLUP)
 El LED integrado te guía: latido = buscando red · fijo = grabando ·
 parpadeo triple = error · apagado = lista.
 
+### Nodo de IA local (inferencia en el ESP32)
+
+Un ESP32 puede ejecutar **una red neuronal pequeña en la propia placa** con
+TensorFlow Lite Micro y avisar a A.R.I.A por HTTP cuando detecta algo (una
+palabra, un gesto, sonido...): la inferencia no depende del servidor.
+
+- **Firmware**: `firmware/lacal-IA-node/` (PlatformIO). Carga el modelo
+  embebido (`src/model_data.h`), resuelve la clase más probable y, si supera el
+  umbral `kUmbralAlerta` (0.80), enciende el LED y manda:
+  `POST /api/esp32/event {"node_id":"...", "prediction":0.87}` a `ARIA_ALERT_URL`.
+- **Exportar tu modelo a la placa** — `scripts/export_tflite.py`:
+
+  ```bash
+  pip install tensorflow numpy
+  python scripts/export_tflite.py red/entrenada.keras
+  python scripts/export_tflite.py red/entrenada.h5 --representative datos/calib.npy -n 200
+  ```
+
+  Convierte a **TFLite INT8** (calibrado con un dataset representativo; sin
+  `--representative` usa muestras aleatorias, solo para probar el pipeline) y
+  regenera `firmware/lacal-IA-node/src/model_data.h` como arreglo `PROGMEM`.
+  Por defecto cuantiza pesos/activaciones a INT8 manteniendo I/O en float
+  (`input->data.f[]`); con `--full-int8` la I/O también va en int8.
+- **El servidor**: el endpoint `POST /api/esp32/event`
+  (`app/api/esp32.py`) valida y registra la alerta en el log, y la reparte a los
+  *hooks* que se registren con `register_esp32_handler(app, ...)` (idempotente,
+  por aplicación) para que la voz o la memoria reaccionen sin acoplar el
+  firmware a esa lógica.
+- Como en los satélites, se compila con PlatformIO; fuera de casa apunta
+  `ARIA_ALERT_URL` a la IP Tailscale de tu PC. Si la lectura supera el umbral
+  constantemente, el ESP32 lo corrige solo con histéresis (ve
+  `kUmbralAlerta` en `src/main.cpp`).
+
+> Estado actual: `model_data.h` es un *placeholder* aún sin modelo real. Para
+> exportar el clasificador o una prueba, instala TensorFlow y ejecuta
+> `scripts/export_tflite.py` sobre el `.keras`/`.h5` correspondiente.
+
 ## Uso
 
 ### Chat por terminal
@@ -493,6 +530,48 @@ borra todo.
   curiosos, te saluda según la hora o pregunta cómo va tu día/proyecto.
   Espera entre 8 y 25 min (aleatorio), máximo 3 comentarios por hora,
   silencio nocturno de 23:00 a 08:00 y nunca interrumpe si estás hablándole.
+
+## Cerebro neural local (sin internet)
+
+A.R.I.A incluye un **cerebro neural propio que corre 100 % local**: un
+clasificador de intenciones y un modelo GPT pequeño entrenado con
+*backpropagation* real, todo en Python puro. No necesita API keys, internet ni
+GPU. Vive en `app/ai/neural/` y guarda el modelo en `data/neural/` (ignorado
+por git).
+
+**Clasificador de intenciones**
+- Arquitectura: Dense(208→64)→ReLU→Dense(64→8)→Softmax. La entrada son 8
+  características manuales + bolsa de palabras (hasta 200 términos).
+- 8 intenciones: `SALUDO`, `DESPEDIDA`, `AGRADECIMIENTO`, `COMANDO`, `QUEJA`,
+  `CURIOSIDAD`, `PREGUNTA` y `CHAT`.
+- Se entrena en segundos y es el componente con umbral más estable: en las
+  pruebas acierta las intenciones claras (saludos, despedidas, comandos,
+  quejas) con confianza ≥ 0.9.
+
+**Generador GPT** (transformer)
+- Dimensiones pensadas para caber en CPU/MCU: vocab 2048 (705 en el corpus
+  real), emb 64, 4 cabezas, 2 capas, seq 256 → **377,472 parámetros**.
+- Entrenado con *next-token prediction* sobre 71 conversaciones + textos
+  extra, con backprop completa por atención, FFN y embeddings con decay de
+  LR; tokens de rol `<user>`/`<assistant>`/`<eos>` **atómicos** (un solo id,
+  por eso la generación sabe parar en `<eos>`); muestreo con máscara de
+  vocabulario real y penalización de repetición.
+- **Cómo entrenarlo y hablarle:**
+
+  ```bash
+  python scripts/train_neural.py               # clasificador + GPT en data/neural
+  python scripts/talk_to_aria.py               # chat por terminal con el cerebro neural
+  ```
+
+- **Estado realista**: el clasificador es fiable y es el candidato natural
+  para el ESP32 (ver abajo). El GPT aprende de verdad (loss baja de ~7.4 a
+  ~5.65, perplexidad ≈ 285 en las conversaciones) y produce texto en la
+  distribución del corpus, pero su generación *condicionada al prompt* todavía
+  es débil con estas dimensiones y datos. Por eso `think()` valida cada
+  respuesta del GPT (mínimo de palabras reales y sin repeticiones degeneradas)
+  y, si no es aprovechable, responde con el generador de respuestas por
+  intención como respaldo: el asistente nunca se queda mudo, y el GPT se puede
+  mejorar con más datos y dimensiones sin tocar el resto.
 
 ## Compañera de desarrollo
 

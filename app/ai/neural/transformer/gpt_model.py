@@ -3,18 +3,17 @@
 Arquitectura GPT-2 simplificada con backpropagation real
 para que el modelo realmente aprenda.
 """
+import json
 import math
 import random
-import json
 from pathlib import Path
 
 from app.ai.neural.transformer.blocks import (
     Embedding,
     Linear,
     TransformerBlock,
-    _layer_norm_forward,
     _layer_norm_backward,
-    _gelu_deriv,
+    _layer_norm_forward,
 )
 
 
@@ -83,11 +82,13 @@ class GPTModel:
         x_normed = []
         self._forward_cache["ln_xnorm"] = []
         self._forward_cache["ln_std"] = []
+        self._forward_cache["ln_out"] = []
         for xi in x:
-            out, xnorm, mean, std = _layer_norm_forward(xi, self.ln_gamma, self.ln_beta)
+            out, xnorm, _mean, std = _layer_norm_forward(xi, self.ln_gamma, self.ln_beta)
             x_normed.append(out)
             self._forward_cache["ln_xnorm"].append(xnorm)
             self._forward_cache["ln_std"].append(std)
+            self._forward_cache["ln_out"].append(out)
 
         # LM head → logits
         logits = [self.lm_head.forward(xi) for xi in x_normed]
@@ -97,67 +98,66 @@ class GPTModel:
         return logits
 
     def backward(self, target_ids: list[int], lr: float = 3e-4) -> float:
-        """Backward pass completo: calcula loss, gradientes, y actualiza pesos.
+        """Backward pass completo (backprop real a través del transformer).
 
-        Returns: loss value
+        Calcula el gradiente de cross-entropy sobre las posiciones válidas y lo
+        propaga: lm_head -> LN final -> bloques transformer -> embeddings.
         """
         logits = self._forward_cache.get("logits", [])
-        token_ids = self._forward_cache.get("token_ids", [])
+        ln_out = self._forward_cache.get("ln_out", [])
+        ln_xnorm = self._forward_cache.get("ln_xnorm", [])
+        ln_std = self._forward_cache.get("ln_std", [])
 
-        if not logits or not token_ids:
+        if not logits or not ln_out:
             return 0.0
 
+        positions = [i for i in range(len(target_ids)) if i < len(logits)]
+        if not positions:
+            return 0.0
+
+        # 1) Gradiente de cross-entropy + softmax por posición y actualizar lm_head
+        d_input = [[0.0] * self.embed_dim for _ in positions]
         total_loss = 0.0
-        grad_output = None
-
-        # Última posición: gradiente desde la loss
-        for i, target_id in enumerate(target_ids):
-            if i >= len(logits):
-                break
-
-            # Cross-entropy + softmax gradient
+        for n, i in enumerate(positions):
             max_l = max(logits[i])
             exp_l = [math.exp(v - max_l) for v in logits[i]]
             total_exp = sum(exp_l)
             probs = [v / total_exp for v in exp_l]
+            total_loss -= math.log(probs[target_ids[i]] + 1e-10)
 
-            total_loss -= math.log(probs[target_id] + 1e-10)
-
-            # grad = probs - one_hot(target)
             grad = [probs[j] for j in range(len(probs))]
-            grad[target_id] -= 1.0
-            grad_output = grad
+            grad[target_ids[i]] -= 1.0
 
-        total_loss /= max(len(target_ids), 1)
+            xin = ln_out[i]
+            weight = self.lm_head.weight
+            # dW += grad . xin ; dX += grad . W
+            for f in range(self.embed_dim):
+                wf = weight[f]
+                grad_input = 0.0
+                for v in range(self.vocab_size):
+                    grad_input += grad[v] * wf[v]
+                    wf[v] -= lr * grad[v] * xin[f]
+                d_input[n][f] = grad_input
 
-        if grad_output is None:
-            return total_loss
+        total_loss /= len(positions)
 
-        # Backward through lm_head
-        lm_grad = self.lm_head.backward(grad_output, lr=lr)
-
-        # Backward through final layer norm
-        ln_xnorm = self._forward_cache.get("ln_xnorm", [])
-        ln_std = self._forward_cache.get("ln_std", [])
-
-        if ln_xnorm:
+        # 2) LayerNorm final por posición
+        dx_final = []
+        for n, i in enumerate(positions):
             dx, dgamma, dbeta = _layer_norm_backward(
-                lm_grad, ln_xnorm[-1], self.ln_gamma, ln_std[-1]
+                d_input[n], ln_xnorm[i], self.ln_gamma, ln_std[i]
             )
-            # Update ln params
-            for i in range(self.embed_dim):
-                self.ln_gamma[i] -= lr * dgamma[i]
-                self.ln_beta[i] -= lr * dbeta[i]
+            for f in range(self.embed_dim):
+                self.ln_gamma[f] -= lr * dgamma[f]
+                self.ln_beta[f] -= lr * dbeta[f]
+            dx_final.append(dx)
 
-        # Backward through transformer blocks (simplified)
-        # For now, we only train the lm_head and embeddings effectively
-        # The transformer blocks use their internal weight updates from forward
+        # 3) Bloques transformer en orden inverso (solo entrenamiento, sin cache)
+        for block in reversed(self.blocks):
+            dx_final = block.backward(dx_final, lr=lr)
 
-        # Update token embeddings for target tokens
-        for i, target_id in enumerate(target_ids):
-            if target_id < self.token_embed.vocab_size:
-                for d in range(min(32, self.token_embed.embed_dim)):
-                    self.token_embed.weight[target_id][d] -= lr * grad_output[d] * 0.01
+        # 4) Embedding de tokens
+        self.token_embed.backward(dx_final, lr=lr)
 
         return total_loss
 
@@ -178,14 +178,38 @@ class GPTModel:
         temperature: float = 0.8,
         top_k: int = 40,
         top_p: float = 0.9,
+        vocab_mask_size: int = 0,
+        repetition_penalty: float = 1.5,
+        min_new_tokens: int = 0,
     ) -> list[int]:
+        """Genera tokens; si vocab_mask_size > 0 solo se muestrean tokens reales.
+
+        El llamador debe pasar el tamaño del vocabulario real del tokenizer para
+        que el modelo no genere IDs de tokens inexistentes (<unk>).
+        """
         generated = list(prompt_ids)
         self.clear_cache()
         self.forward(generated, use_cache=True)
 
+        # Penalización por repetición para evitar bucles (ej: "eeee...")
+        log_rep_pen = math.log(repetition_penalty) if repetition_penalty > 1.0 else 0.0
+        seen: dict[int, int] = {}
+        for tid in generated:
+            seen[tid] = seen.get(tid, 0) + 1
+
         for _ in range(max_new_tokens):
             logits = self.forward(generated[-1:], use_cache=True)
             next_logits = logits[-1]
+
+            # Restringir a tokens que existen en el vocabulario real
+            if vocab_mask_size and 0 < vocab_mask_size < len(next_logits):
+                for i in range(vocab_mask_size, len(next_logits)):
+                    next_logits[i] = float("-inf")
+                if vocab_mask_size > 1:
+                    # <unk>, <bos>, <user>, <assistant>: tokens de control, no se emiten
+                    for ctl_id in (1, 2, 5, 6):
+                        if ctl_id < vocab_mask_size:
+                            next_logits[ctl_id] = float("-inf")
 
             if temperature > 0:
                 next_logits = [v / temperature for v in next_logits]
@@ -207,6 +231,14 @@ class GPTModel:
                         break
                 next_logits = [v if v >= cutoff else float("-inf") for v in next_logits]
 
+            # Penalizar tokens ya generados (anti-loop)
+            if log_rep_pen > 0.0 and seen:
+                for tid, count in seen.items():
+                    if tid < len(next_logits) and next_logits[tid] > -1e10:
+                        next_logits[tid] -= log_rep_pen * count
+
+            if not any(v > -1e10 for v in next_logits):
+                break
             max_l = max(v for v in next_logits if v > -1e10)
             exp_l = [math.exp(v - max_l) if v > -1e10 else 0.0 for v in next_logits]
             total = sum(exp_l)
@@ -224,7 +256,9 @@ class GPTModel:
                     break
 
             generated.append(next_id)
-            if next_id in (0, 3):
+            seen[next_id] = seen.get(next_id, 0) + 1
+            n_generated = len(generated) - len(prompt_ids)
+            if next_id in (0, 3) and n_generated >= min_new_tokens:
                 break
 
         return generated

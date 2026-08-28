@@ -4,7 +4,7 @@ from app.core.config import Settings, get_settings
 
 def test_defaults():
     settings = Settings()
-    assert settings.app_name == "SIA"
+    assert settings.app_name == "A.R.I.A"
     assert settings.environment == "development"
     assert settings.host == "0.0.0.0"
     assert settings.port == 8000

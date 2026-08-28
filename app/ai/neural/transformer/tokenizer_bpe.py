@@ -3,15 +3,15 @@
 Entrena pares de bytes frecuentes para crear un vocabulario efectivo.
 """
 import json
-import re
 from collections import Counter
 from pathlib import Path
+from typing import ClassVar
 
 
 class BPETokenizer:
     """Tokenizador BPE (Byte Pair Encoding) para español."""
 
-    SPECIAL_TOKENS = {
+    SPECIAL_TOKENS: ClassVar[dict[str, int]] = {
         "<pad>": 0,
         "<unk>": 1,
         "<bos>": 2,
@@ -32,10 +32,12 @@ class BPETokenizer:
         self._is_trained = False
 
     def _get_stats(self, ids: list[int]) -> Counter:
-        """Cuenta pares de tokens adyacentes."""
+        """Cuenta pares de tokens adyacentes (sin fusionar tokens especiales)."""
         counts: Counter = Counter()
+        ns = len(self.SPECIAL_TOKENS)
         for i in range(len(ids) - 1):
-            counts[(ids[i], ids[i + 1])] += 1
+            if ids[i] >= ns and ids[i + 1] >= ns:
+                counts[(ids[i], ids[i + 1])] += 1
         return counts
 
     def _merge(self, ids: list[int], pair: tuple[int, int], new_id: int) -> list[int]:
@@ -50,6 +52,34 @@ class BPETokenizer:
                 new_ids.append(ids[i])
                 i += 1
         return new_ids
+
+    def _tokenize_ids(self, text: str) -> list[int]:
+        """Convierte texto a IDs, tratando los tokens especiales como atómicos."""
+        ids = []
+        i = 0
+        specials = sorted(self.SPECIAL_TOKENS, key=len, reverse=True)
+        while i < len(text):
+            matched = False
+            for tok in specials:
+                if text.startswith(tok, i):
+                    ids.append(self.SPECIAL_TOKENS[tok])
+                    i += len(tok)
+                    matched = True
+                    break
+            if matched:
+                continue
+            ch = text[i]
+            i += 1
+            if ch in self.vocab:
+                ids.append(self.vocab[ch])
+            else:
+                # Carácter UTF-8 compuesto — buscar sus bytes
+                for b in ch.encode("utf-8"):
+                    if chr(b) in self.vocab:
+                        ids.append(self.vocab[chr(b)])
+                    else:
+                        ids.append(self.vocab.get("<unk>", 1))
+        return ids
 
     def train(self, texts: list[str], verbose: bool = False) -> None:
         """Entrena el tokenizer en una lista de textos."""
@@ -77,21 +107,8 @@ class BPETokenizer:
 
         # Paso 2: BPE merges
         self.merges = []
-        # Tokenizar todos los textos en IDs de bytes
-        all_ids = []
-        for text in texts:
-            text_ids = []
-            for ch in text:
-                if ch in self.vocab:
-                    text_ids.append(self.vocab[ch])
-                else:
-                    # Carácter UTF-8 compuesto — buscar su byte
-                    for b in ch.encode("utf-8"):
-                        if chr(b) in self.vocab:
-                            text_ids.append(self.vocab[chr(b)])
-                        else:
-                            text_ids.append(self.vocab.get("<unk>", 1))
-            all_ids.append(text_ids)
+        # Tokenizar todos los textos en IDs (especiales atómicos + bytes/merges)
+        all_ids = [self._tokenize_ids(text) for text in texts]
 
         # Realizar merges hasta alcanzar vocab_size
         num_merges = self.vocab_size - len(self.vocab)
@@ -143,18 +160,9 @@ class BPETokenizer:
         if not self._is_trained:
             raise RuntimeError("Tokenizer no entrenado")
 
-        ids = []
-        for ch in text:
-            if ch in self.vocab:
-                ids.append(self.vocab[ch])
-            else:
-                for b in ch.encode("utf-8"):
-                    if chr(b) in self.vocab:
-                        ids.append(self.vocab[chr(b)])
-                    else:
-                        ids.append(self.vocab.get("<unk>", 1))
+        ids = self._tokenize_ids(text)
 
-        # Aplicar merges en orden
+        # Aplicar merges en orden sobre tokens no especiales
         for pair_str in self.merges:
             pair = (
                 self.vocab.get(pair_str[0], -1),

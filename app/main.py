@@ -14,10 +14,13 @@ from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 
 from app.ai.factory import build_orchestrator
+from app.ai.schemas import ChatRole
+from app.api.esp32 import register_esp32_handler
+from app.api.esp32 import router as esp32_router
 from app.core.config import get_settings
 from app.core.logging import get_logger, setup_logging
 from app.web.device_ws import DeviceHubConnection, get_hub
-from app.web.interface_ws import InterfaceConnection
+from app.web.interface_ws import InterfaceConnection, hay_alguien_escuchando
 from app.web.presencia_ws import PresenciaConnection
 from app.web.satelite_ws import SateliteConnection
 from app.web.ws import ChatConnection
@@ -117,6 +120,57 @@ def create_app(orchestrator=None) -> FastAPI:
         description="Asistente personal de IA inspirado en JARVIS.",
     )
     app.state.orchestrator = orchestrator
+
+    app.include_router(esp32_router)
+
+    async def _memoria_esp32(node_id: str, prediction: float) -> None:
+        """Registra la alerta en la memoria persistente del orquestador."""
+        orquestador = getattr(app.state, "orchestrator", None)
+        if orquestador is None:
+            return  # sin orquestador aún cargado: no hay nada que registrar
+        memoria = orquestador.memory
+        if memoria is None:
+            return
+        try:
+            memoria.add_message(
+                ChatRole.USER,
+                f"[ESP32:{node_id}] Nodo de IA local detectó un evento "
+                f"con probabilidad {prediction:.4f}.",
+            )
+            logger.info(
+                "Alerta ESP32 registrada en memoria",
+                extra={"node_id": node_id, "prediction": prediction},
+            )
+        except Exception as exc:  # noqa: BLE001 — registrar nunca rompe la ruta
+            logger.warning(
+                "No pude guardar la alerta en memoria",
+                extra={"node_id": node_id, "error": str(exc)},
+            )
+
+    async def _voz_esp32(node_id: str, prediction: float) -> None:
+        """Comenta la alerta por voz si hay una interfaz escuchando."""
+        if not hay_alguien_escuchando():
+            return
+        try:
+            from app.voice.tts import build_tts_provider
+            from app.web.interface_ws import hablar_a_todas
+
+            await hablar_a_todas(
+                f"Alerta del nodo {node_id}: probabilidad de evento "
+                f"{prediction * 100:.0f} por ciento.",
+                build_tts_provider(),
+            )
+        except Exception as exc:  # noqa: BLE001 — hablar nunca rompe la ruta
+            logger.warning(
+                "No pude anunciar la alerta por voz",
+                extra={"node_id": node_id, "error": str(exc)},
+            )
+
+    # Hooks por defecto: la alerta del ESP32 puede guardarse en memoria y
+    # anunciarse por voz. Ambos son perezosos: no hacen nada si el orquestador
+    # todavía no existe o si nadie está escuchando.
+    register_esp32_handler(app, _memoria_esp32)
+    register_esp32_handler(app, _voz_esp32)
 
     @app.get("/health", tags=["system"])
     async def health():

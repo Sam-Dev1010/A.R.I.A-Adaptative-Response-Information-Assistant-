@@ -15,14 +15,14 @@ from typing import Any
 
 from app.ai.neural.intent_classifier import IntentClassifier
 from app.ai.neural.knowledge_base import KnowledgeBase
-from app.ai.neural.reasoning import ReasoningEngine, ReasoningResult
+from app.ai.neural.reasoning import ReasoningEngine
 from app.ai.neural.response_generator import ResponseGenerator
 from app.ai.neural.semantic_memory import SemanticMemory
 from app.ai.neural.text_generator import TextGenerator
 from app.ai.neural.transformer.gpt_model import GPTModel
+from app.ai.neural.transformer.inference import GPTInference
 from app.ai.neural.transformer.tokenizer_bpe import BPETokenizer
 from app.ai.neural.transformer.trainer import GPTTrainer
-from app.ai.neural.transformer.inference import GPTInference
 from app.core.logging import get_logger
 
 logger = get_logger("sia.neural")
@@ -300,7 +300,24 @@ class Strategist:
 class NeuralBrain:
     """Cerebro neural completo de A.R.I.A: inteligencia autónoma con GPT real."""
 
-    def __init__(self, data_dir: Path | str) -> None:
+    def __init__(
+        self,
+        data_dir: Path | str,
+        *,
+        gpt_vocab_size: int = 2048,
+        gpt_embed_dim: int = 64,
+        gpt_num_heads: int = 4,
+        gpt_num_layers: int = 2,
+        gpt_max_seq_len: int = 256,
+        gpt_max_new_tokens: int = 150,
+        gpt_temperature: float = 0.6,
+    ) -> None:
+        """Cerebro neural de A.R.I.A.
+
+        El modelo GPT es un transformer pequeño ("tiny GPT") entrenable en Python
+        puro; los tamaños por defecto están ajustados para entrenar en tiempos
+        razonables sin depender de GPUs ni librerías externas.
+        """
         self.data_dir = Path(data_dir)
         self.data_dir.mkdir(parents=True, exist_ok=True)
 
@@ -315,20 +332,20 @@ class NeuralBrain:
         self.strategist = Strategist(self.kb)
 
         # === MODELO GPT REAL ===
-        self.gpt_tokenizer = BPETokenizer(vocab_size=8000)
+        self.gpt_tokenizer = BPETokenizer(vocab_size=gpt_vocab_size)
         self.gpt_model = GPTModel(
-            vocab_size=8000,
-            embed_dim=256,
-            num_heads=8,
-            num_layers=6,
-            max_seq_len=512,
+            vocab_size=gpt_vocab_size,
+            embed_dim=gpt_embed_dim,
+            num_heads=gpt_num_heads,
+            num_layers=gpt_num_layers,
+            max_seq_len=gpt_max_seq_len,
         )
         self.gpt_trainer = GPTTrainer(self.gpt_model, self.gpt_tokenizer)
         self.gpt_inference = GPTInference(
             self.gpt_model,
             self.gpt_tokenizer,
-            max_new_tokens=150,
-            temperature=0.8,
+            max_new_tokens=gpt_max_new_tokens,
+            temperature=gpt_temperature,
         )
         self._gpt_ready = False
 
@@ -355,7 +372,7 @@ class NeuralBrain:
                 self.classifier.load(model_dir)
                 self._is_trained = True
                 logger.info("Clasificador cargado")
-            except Exception as e:
+            except Exception as e:  # noqa: BLE001
                 logger.warning("Error cargando clasificador: %s", e)
 
         # Cargar modelo GPT si existe
@@ -366,7 +383,7 @@ class NeuralBrain:
                 self.gpt_tokenizer.load(gpt_dir / "tokenizer")
                 self._gpt_ready = True
                 logger.info("Modelo GPT cargado (%d params)", self.gpt_model.count_params())
-            except Exception as e:
+            except Exception as e:  # noqa: BLE001
                 logger.warning("Error cargando GPT: %s", e)
 
         # Cargar generador de texto
@@ -374,7 +391,7 @@ class NeuralBrain:
         if gen_dir.exists():
             try:
                 self.text_gen.load(gen_dir)
-            except Exception:
+            except Exception:  # noqa: BLE001, S110
                 pass
 
         # Cargar personalidad
@@ -383,7 +400,7 @@ class NeuralBrain:
             try:
                 data = json.loads(personality_file.read_text())
                 self.personality.from_dict(data)
-            except Exception:
+            except Exception:  # noqa: BLE001, S110
                 pass
 
         # Cargar datos de entrenamiento
@@ -392,7 +409,7 @@ class NeuralBrain:
             try:
                 self._training_data = json.loads(training_file.read_text())
                 self._train_from_data()
-            except Exception:
+            except Exception:  # noqa: BLE001, S110
                 pass
 
         return self
@@ -409,7 +426,7 @@ class NeuralBrain:
         self._query_count += 1
 
         # 1. Clasificar intención
-        intent, confidence = self.classifier.classify(user_message)
+        intent, _confidence = self.classifier.classify(user_message)
 
         # 2. Almacenar en memoria
         self.memory.store(user_message, category="conversation")
@@ -458,15 +475,34 @@ class NeuralBrain:
         if self._gpt_ready:
             try:
                 response = self.gpt_inference.respond(user_message)
-                if response and len(response) > 5:
+                if self._is_usable_response(response):
                     return response
-            except Exception as e:
+            except Exception as e:  # noqa: BLE001
                 logger.debug("GPT generación falló, usando fallback: %s", e)
 
         # Fallback: usar generador por plantillas (solo si GPT no está listo)
         return self.generator.generate(
             user_message, intent, 0.5,
         )
+
+    def _is_usable_response(self, response: str) -> bool:
+        """¿La respuesta generada es texto aprovechable? Evita slogans degenerados."""
+        if not response or len(response) < 5:
+            return False
+        # Debe contener al menos 2 "palabras" con letras reales
+        words = [w for w in response.split() if any(c.isalpha() for c in w)]
+        if len(words) < 2:
+            return False
+        # Rechazar repeticiones degeneradas del mismo carácter (ej: "eeee...")
+        seq, prev, run = 1, "", 0
+        for ch in response.lower():
+            if ch == prev:
+                run += 1
+                seq = max(seq, run)
+            else:
+                run = 1
+            prev = ch
+        return seq < 6
 
     def train_gpt(
         self,
@@ -590,7 +626,7 @@ class NeuralBrain:
         # --- HORA ---
         if any(w in msg for w in ["hora", "qué hora es"]):
             from datetime import datetime
-            now = datetime.now()
+            now = datetime.now()  # noqa: DTZ005
             return f"Son las {now.strftime('%H:%M')}."
 
         # --- INFO SISTEMA ---

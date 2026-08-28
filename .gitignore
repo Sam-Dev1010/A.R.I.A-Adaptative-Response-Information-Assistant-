@@ -17,6 +17,9 @@ htmlcov/
 data/*
 !data/.gitkeep
 
+# Firmware ESP32 (PlatformIO)
+.pio/
+
 # IDEs
 .idea/
 .vscode/

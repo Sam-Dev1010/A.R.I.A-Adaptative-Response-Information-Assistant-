@@ -164,6 +164,9 @@ async def test_deep_study_registrado_en_el_orquestador(tmp_path):
         orchestrator = build_orchestrator(
             __import__("app.core.config", fromlist=["Settings"]).Settings(
                 data_dir=tmp_path,
+                # El cerebro neural puede enunciar un proveedor LLM (None si no
+                # hay API key); al desactivarlo se garantiza la ruta provider+memoria.
+                neural_enabled=False,
             ),
             memory=MemoryManager(tmp_path / "m.db").open(),
         )

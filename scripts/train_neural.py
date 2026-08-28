@@ -13,9 +13,6 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from app.ai.neural.brain import NeuralBrain
-from app.ai.neural.transformer.tokenizer_bpe import BPETokenizer
-from app.ai.neural.transformer.gpt_model import GPTModel
-from app.ai.neural.transformer.trainer import GPTTrainer
 
 # === CONVERSACIONES DE ENTRENAMIENTO ===
 # Cada conversación enseña a ARIA a responder de forma natural
@@ -152,12 +149,23 @@ EXTRA_TEXTS = [
 
 
 def main():
+    import argparse
+
+    parser = argparse.ArgumentParser(description="Entrena el modelo neural de ARIA")
+    parser.add_argument(
+        "--data-dir",
+        type=Path,
+        default=Path(__file__).parent.parent / "data" / "neural",
+        help="Directorio donde se guarda el modelo (default: data/neural)",
+    )
+    args = parser.parse_args()
+
     print("=" * 60)
     print(" A.R.I.A - Entrenamiento del Modelo Neural GPT")
     print("=" * 60)
     print()
 
-    data_dir = Path(__file__).parent.parent / "data" / "aria_gpt"
+    data_dir = args.data_dir
     brain = NeuralBrain(data_dir)
     brain.initialize()
 

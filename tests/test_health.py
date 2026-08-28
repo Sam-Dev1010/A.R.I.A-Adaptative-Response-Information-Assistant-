@@ -11,7 +11,7 @@ def test_health_returns_ok():
     assert response.status_code == 200
     body = response.json()
     assert body["status"] == "ok"
-    assert body["service"] == "SIA"
+    assert body["service"] == "A.R.I.A"
     assert "version" in body
     assert "environment" in body
     assert body["uptime_seconds"] >= 0

@@ -3,7 +3,6 @@
 No usa respuestas predefinidas — genera texto token por token.
 """
 import time
-from pathlib import Path
 
 from app.ai.neural.transformer.gpt_model import GPTModel
 from app.ai.neural.transformer.tokenizer_bpe import BPETokenizer
@@ -57,6 +56,9 @@ class GPTInference:
             temperature=self.temperature,
             top_k=self.top_k,
             top_p=self.top_p,
+            vocab_mask_size=self.tokenizer.vocab_len,
+            repetition_penalty=1.5,
+            min_new_tokens=6,
         )
 
         # Extraer solo los tokens nuevos
