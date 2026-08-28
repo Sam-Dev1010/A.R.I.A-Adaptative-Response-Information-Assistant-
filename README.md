@@ -547,11 +547,16 @@ por git).
 - Se entrena en segundos y es el componente con umbral más estable: en las
   pruebas acierta las intenciones claras (saludos, despedidas, comandos,
   quejas) con confianza ≥ 0.9.
+- **Reglas + red**: el etiquetado vive en `app/ai/neural/intent_rules.py`
+  (las preguntas con `?` tienen prioridad) y `classify()` lo usa como respaldo
+  determinista cuando la red duda. Así la red se concentra en los casos de
+  conversación libre (CHAT/CURIOSIDAD) y las señales explícitas (comandos,
+  preguntas, quejas) nunca se pierden por falta de ejemplos de entrenamiento.
 
 **Generador GPT** (transformer)
 - Dimensiones pensadas para caber en CPU/MCU: vocab 2048 (705 en el corpus
   real), emb 64, 4 cabezas, 2 capas, seq 256 → **377,472 parámetros**.
-- Entrenado con *next-token prediction* sobre 71 conversaciones + textos
+- Entrenado con *next-token prediction* sobre 86 conversaciones + textos
   extra, con backprop completa por atención, FFN y embeddings con decay de
   LR; tokens de rol `<user>`/`<assistant>`/`<eos>` **atómicos** (un solo id,
   por eso la generación sabe parar en `<eos>`); muestreo con máscara de
