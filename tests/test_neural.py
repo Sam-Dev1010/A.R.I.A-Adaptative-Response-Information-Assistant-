@@ -2,6 +2,8 @@
 import random
 
 from app.ai.neural.brain import NeuralBrain
+from app.ai.neural.intent_classifier import IntentClassifier
+from app.ai.neural.intent_rules import intent_label
 from app.ai.neural.transformer.gpt_model import GPTModel
 from app.ai.neural.transformer.tokenizer_bpe import BPETokenizer
 
@@ -94,3 +96,46 @@ def test_usable_response_rechaza_basura(tmp_path):
     assert not brain._is_usable_response("eeeeeeeeeeeeeeee")
     assert not brain._is_usable_response("eoseoseoseos")
     assert not brain._is_usable_response("a b")
+
+
+# --- Clasificador: reglas deterministas con prioridad a las preguntas --------
+
+
+def test_intent_label_preguntas_tienen_prioridad():
+    assert intent_label("¿Cómo te llamas?") == "PREGUNTA"
+    assert intent_label("¿Qué hora es?") == "PREGUNTA"
+    assert intent_label("¿Puedes explicarme qué es Git?") == "PREGUNTA"
+
+
+def test_intent_label_clases_por_palabra_clave():
+    assert intent_label("Hola ARIA") == "SALUDO"
+    assert intent_label("Nos vemos luego") == "DESPEDIDA"
+    assert intent_label("Gracias por todo") == "AGRADECIMIENTO"
+    assert intent_label("Abre el navegador") == "COMANDO"
+    assert intent_label("Esto no me funciona") == "QUEJA"
+    assert intent_label("El programa no arranca") == "QUEJA"
+    assert intent_label("Cuéntame algo") == "CURIOSIDAD"
+    assert intent_label("Explica qué es Linux") == "CURIOSIDAD"
+    assert intent_label("Cómo va todo") == "CHAT"
+
+
+def _probs_favor_chat():
+    probs = [0.02] * len(IntentClassifier.INTENTS)
+    probs[IntentClassifier.INTENTS.index("CHAT")] = 0.34
+    return probs
+
+
+def test_classify_prioriza_reglas_cuando_la_red_duda():
+    cls = IntentClassifier()
+    cls.network.predict = lambda x: _probs_favor_chat()
+    intent, conf = cls.classify("¿Qué hora es?")
+    assert intent == "PREGUNTA"
+    assert conf >= 0.8
+
+
+def test_classify_usa_la_red_si_no_hay_senal_por_regla():
+    cls = IntentClassifier()
+    cls.network.predict = lambda x: _probs_favor_chat()
+    intent, conf = cls.classify("Cómo va todo")
+    assert intent == "CHAT"
+    assert abs(conf - 0.34) < 1e-9

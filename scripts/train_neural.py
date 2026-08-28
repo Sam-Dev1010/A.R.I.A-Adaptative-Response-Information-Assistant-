@@ -13,6 +13,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from app.ai.neural.brain import NeuralBrain
+from app.ai.neural.intent_rules import intent_label
 
 # === CONVERSACIONES DE ENTRENAMIENTO ===
 # Cada conversación enseña a ARIA a responder de forma natural
@@ -77,6 +78,23 @@ CONVERSATIONS = [
     {"user": "Para qué sirves", "assistant": "Para ayudarte con todo en tu computadora."},
     {"user": "Cómo te llamas", "assistant": "Me llamo A.R.I.A."},
     {"user": "Tienes nombre", "assistant": "Sí, soy A.R.I.A."},
+
+    # Preguntas interrogativas (PREGUNTA)
+    {"user": "¿Cómo te llamas?", "assistant": "Me llamo A.R.I.A. ¿Y tú, cómo te llamas?"},
+    {"user": "¿Quién creó a A.R.I.A?", "assistant": "Me creó Samuel, mi creador."},
+    {"user": "¿Dónde vives?", "assistant": "Vivo dentro de esta computadora, en tu equipo."},
+    {"user": "¿Cuándo se hizo la primera computadora?", "assistant": "En los años 40 del siglo XX; ocupaban una habitación entera."},
+    {"user": "¿Por qué se llama Python?", "assistant": "Porque a su creador, Guido van Rossum, le gustaba Monty Python."},
+    {"user": "¿Cuál es tu color favorito?", "assistant": "El dorado, como mi interfaz holográfica."},
+    {"user": "¿Eres una persona?", "assistant": "No, soy un programa, pero puedo pensar y aprender."},
+    {"user": "¿Qué es una red neuronal?", "assistant": "Un sistema que aprende de ejemplos, inspirado en el cerebro humano."},
+    {"user": "¿Qué es la memoria RAM?", "assistant": "La memoria de trabajo del equipo: rápida y temporal."},
+    {"user": "¿Qué diferencia hay entre CPU y GPU?", "assistant": "La CPU sirve para todo y la GPU está especializada en cómputo paralelo y gráficos."},
+    {"user": "¿Cuánto es 2 más 2?", "assistant": "Cuatro. ¿Quieres que te ayude con más cálculos?"},
+    {"user": "¿Cómo funciona internet?", "assistant": "Envía paquetes de datos entre computadoras con protocolos como TCP/IP."},
+    {"user": "¿Qué es un algoritmo?", "assistant": "Una serie de pasos ordenados para resolver un problema."},
+    {"user": "¿Puedes aprender cosas nuevas?", "assistant": "Sí, aprendo de nuestras conversaciones y puedo investigar temas por mí mismo."},
+    {"user": "¿Qué haces cuando no hablo contigo?", "assistant": "Espero, y a veces investigo temas interesantes para contarte."},
 
     # Conocimiento general
     {"user": "Qué es Python", "assistant": "Python es un lenguaje de programación de alto nivel, conocido por su simplicidad."},
@@ -172,26 +190,7 @@ def main():
     # 1. Entrenar clasificador de intenciones
     print("1. Entrenando clasificador de intenciones...")
     texts = [c["user"] for c in CONVERSATIONS] * 3
-    intents = []
-    for _ in range(3):
-        for c in CONVERSATIONS:
-            msg = c["user"].lower()
-            if any(w in msg for w in ["hola", "buenos", "buenas", "hey", "qué onda", "cómo estás", "qué tal"]):
-                intents.append("SALUDO")
-            elif any(w in msg for w in ["adiós", "hasta luego", "me voy", "bye", "chao", "nos vemos", "hasta pronto"]):
-                intents.append("DESPEDIDA")
-            elif any(w in msg for w in ["gracias", "thanks", "agradezco"]):
-                intents.append("AGRADECIMIENTO")
-            elif any(w in msg for w in ["lista", "ejecuta", "abre", "corre", "lee", "crea", "muestra", "instala", "guarda"]):
-                intents.append("COMANDO")
-            elif any(w in msg for w in ["no funciona", "error", "roto", "problema"]):
-                intents.append("QUEJA")
-            elif any(w in msg for w in ["cuéntame", "qué sabes", "explícame", "opinas", "cuéntame de", "cuéntame algo"]):
-                intents.append("CURIOSIDAD")
-            elif "?" in c["user"]:
-                intents.append("PREGUNTA")
-            else:
-                intents.append("CHAT")
+    intents = [intent_label(c["user"]) for _ in range(3) for c in CONVERSATIONS]
 
     brain.add_training_data(texts, intents)
     brain.train(epochs=30)

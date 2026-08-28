@@ -14,10 +14,11 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from app.ai.neural.brain import NeuralBrain
-from app.tools.file_tools import ListFilesTool, ReadFileTool, CreateFileTool
-from app.tools.dev_tools import RunCommandTool
+from app.ai.neural.intent_rules import intent_label
+from app.tools.builtins import GetSystemInfoTool, GetTimeTool
 from app.tools.desktop_tools import OpenAppTool
-from app.tools.builtins import GetTimeTool, GetSystemInfoTool
+from app.tools.dev_tools import RunCommandTool
+from app.tools.file_tools import CreateFileTool, ListFilesTool, ReadFileTool
 
 
 def print_colored(text: str, color: str) -> None:
@@ -146,26 +147,7 @@ async def main():
     if not brain._is_trained:
         print_colored("Entrenando clasificador de intenciones...", "yellow")
         texts = [c["user"] for c in TRAINING_CONVERSATIONS] * 3
-        intents = []
-        for _ in range(3):
-            for c in TRAINING_CONVERSATIONS:
-                msg = c["user"].lower()
-                if any(w in msg for w in ["hola", "buenos", "buenas", "hey", "qué onda"]):
-                    intents.append("SALUDO")
-                elif any(w in msg for w in ["adiós", "hasta luego", "me voy", "bye", "chao"]):
-                    intents.append("DESPEDIDA")
-                elif any(w in msg for w in ["gracias", "thanks", "agradezco"]):
-                    intents.append("AGRADECIMIENTO")
-                elif any(w in msg for w in ["lista", "ejecuta", "abre", "corre", "lee", "crea", "muestra"]):
-                    intents.append("COMANDO")
-                elif any(w in msg for w in ["no funciona", "error", "roto", "problema"]):
-                    intents.append("QUEJA")
-                elif any(w in msg for w in ["cuéntame", "qué sabes", "explícame", "opinas"]):
-                    intents.append("CURIOSIDAD")
-                elif "?" in c["user"]:
-                    intents.append("PREGUNTA")
-                else:
-                    intents.append("CHAT")
+        intents = [intent_label(c["user"]) for _ in range(3) for c in TRAINING_CONVERSATIONS]
         brain.add_training_data(texts, intents)
         brain.train(epochs=30)
         print_colored("¡Clasificador listo!", "green")
@@ -204,7 +186,7 @@ async def main():
         try:
             response = await brain.think(user_input)
             print_colored(f"ARIA> {response}", "blue")
-        except Exception as e:
+        except Exception as e:  # noqa: BLE001
             print_colored(f"Error: {e}", "red")
 
     brain.close()

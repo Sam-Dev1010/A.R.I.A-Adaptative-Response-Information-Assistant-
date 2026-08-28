@@ -8,9 +8,10 @@ Usa una red neuronal para clasificar mensajes en categorías como:
 - DESPEDIDA: Despedida
 """
 import json
-import math
 from pathlib import Path
+from typing import ClassVar
 
+from app.ai.neural.intent_rules import intent_label
 from app.ai.neural.layers import Activation, Dense
 from app.ai.neural.network import SequentialNetwork
 from app.ai.neural.tokenizer import Tokenizer
@@ -21,7 +22,7 @@ class IntentClassifier:
     """Clasificador de intenciones basado en red neuronal."""
 
     # Intenciones conocidas
-    INTENTS = [
+    INTENTS: ClassVar[list[str]] = [
         "PREGUNTA",      # El usuario hace una pregunta
         "COMANDO",       # El usuario pide ejecutar algo
         "CHAT",          # Conversación general
@@ -93,7 +94,12 @@ class IntentClassifier:
         return manual_features + bow
 
     def classify(self, text: str) -> tuple[str, float]:
-        """Clasifica un mensaje y devuelve (intención, confianza)."""
+        """Clasifica un mensaje y devuelve (intención, confianza).
+
+        La red neuronal puede fallar con clases poco representadas (p. ej.
+        PREGUNTA con pocos ejemplos), así que las reglas deterministas actúan
+        como respaldo cuando la red no está suficientemente convencida.
+        """
         features = self._text_to_features(text)
         probabilities = self.network.predict(features)
 
@@ -104,10 +110,16 @@ class IntentClassifier:
                 max_prob = p
                 max_idx = i
 
-        intent = self.id_to_intent[max_idx]
-        confidence = max_prob
+        neural_intent = self.id_to_intent[max_idx]
 
-        return intent, confidence
+        # Las reglas son la fuente de las etiquetas de entrenamiento, así que
+        # si coinciden con una clase explícita tienen prioridad; la red solo
+        # decide cuando no hay ninguna señal determinista.
+        rule_intent = intent_label(text)
+        if rule_intent != "CHAT" and rule_intent != neural_intent:
+            return rule_intent, 0.85
+
+        return neural_intent, max_prob
 
     def classify_detailed(self, text: str) -> dict[str, float]:
         """Clasifica y devuelve probabilidades de todas las intenciones."""
