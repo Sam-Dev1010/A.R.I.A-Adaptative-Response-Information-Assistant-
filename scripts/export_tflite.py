@@ -29,6 +29,7 @@ from __future__ import annotations
 
 import argparse
 import sys
+from collections.abc import Callable
 from pathlib import Path
 
 _ENCABEZADO = """\
@@ -118,59 +119,41 @@ def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     return parser.parse_args(argv)
 
 
-def _representative_dataset(model, args: argparse.Namespace):
-    """Generador de muestras para la calibración INT8.
+def _cargar_representative(ruta: str | Path, samples: int):
+    """Carga un dataset representativo (.npy o .npz) para calibración INT8.
 
-    Usa el archivo ``--representative`` si se pasó; si no, fabrica muestras
-    aleatorias a partir de la forma de entrada del modelo (placeholder).
+    Devuelve un array NumPy (N, ...) recortado a ``samples`` muestras.
     """
     import numpy as np
 
-    input_shape = list(model.inputs[0].shape)
-    if any(dim is None for dim in input_shape):
-        raise SystemExit(
-            "La entrada del modelo tiene dimensión dinámica (None). "
-            "Fija la forma o pasa explícitamente batch=1 antes de exportar."
-        )
-    sample_shape = input_shape[1:]
-
-    if args.representative:
-        ruta = Path(args.representative)
-        if not ruta.exists():
-            raise SystemExit(f"No existe el dataset representativo: {ruta}")
-        data = np.load(ruta)
-        array = data
-        if isinstance(data, np.lib.npyio.NpzFile):
-            if "arr_0" in data:
-                array = data["arr_0"]
-            elif data.files:
-                array = data[data.files[0]]
-                print(f"[datos] Usando '{data.files[0]}' del .npz")
-            data.close()
-        muestras = np.asarray(array)
-        if muestras.size == 0:
-            raise SystemExit("El dataset representativo está vacío.")
-        print(f"[datos] {len(muestras)} muestras cargadas desde {ruta}")
-    else:
-        # Placeholder: valores aleatorios 0..1 (pipeline de prueba).
-        print(
-            "[datos] Sin --representative: calibrando con muestras aleatorias "
-            "(solo prueba del pipeline)."
-        )
-        muestras = np.random.default_rng(0).random((args.samples, *sample_shape))
-
-    muestras = muestras[: args.samples]
-
-    def generar():
-        for muestra in muestras:
-            yield [muestra.astype(np.float32, copy=False)]
-
-    return generar
+    ruta = Path(ruta)
+    if not ruta.exists():
+        raise SystemExit(f"No existe el dataset representativo: {ruta}")
+    data = np.load(ruta)
+    array = data
+    if isinstance(data, np.lib.npyio.NpzFile):
+        if "arr_0" in data:
+            array = data["arr_0"]
+        elif data.files:
+            array = data[data.files[0]]
+            print(f"[datos] Usando '{data.files[0]}' del .npz")
+        data.close()
+    muestras = np.asarray(array)
+    if muestras.size == 0:
+        raise SystemExit("El dataset representativo está vacío.")
+    print(f"[datos] {len(muestras)} muestras cargadas desde {ruta}")
+    return muestras[:samples]
 
 
 def _verificar_firma_tfl3(blob: bytes) -> None:
-    """Comprueba la cabecera FlatBuffers: 'TFL3' en el offset 4."""
-    if len(blob) < 8 or blob[0:4] != b"\x1c\x00\x00\x00" or blob[4:8] != b"TFL3":
+    """Comprueba la cabecera FlatBuffers: el identificador 'TFL3' en el offset 4.
+
+    Observa que la ante-palabra (offset 0, tamaño del preámbulo) puede variar
+    entre versiones de TensorFlow (``0x1c``/28 o ``0x20``/32); el contrato que
+    exige TensorFlow Lite Micro (y el firmware, ``isValidTFLiteModel()``) es
+    únicamente el identificador ``TFL3`` en la posición 4.
+    """
+    if len(blob) < 32 or blob[4:8] != b"TFL3":
         raise SystemExit(
             "ERROR: el binario generado no tiene la firma TFL3 de TensorFlow "
             "Lite. No se escribe el header."
@@ -192,6 +175,78 @@ def _generar_header(blob: bytes) -> str:
         f"\n#endif\n"
     )
     return _ENCABEZADO + "\n" + cuerpo + "\n" + pie
+
+
+def _convertir_a_tflite(
+    keras_model,
+    *,
+    quantize: bool = True,
+    full_int8: bool = False,
+    representative_data=None,
+) -> bytes:
+    """Convierte un modelo Keras a un binario TensorFlow Lite.
+
+    Función reutilizable (importable) que encapsula todo el pipeline de
+    conversión y cuantización:
+
+    - ``quantize``: por defecto ``True``. Cuantiza pesos y activaciones a INT8
+      con ``Optimize.DEFAULT`` manteniendo I/O en float (el firmware alimenta
+      ``input->data.f[]`` y lee ``output->data.f[]`` sin cambios).
+    - ``full_int8``: además obliga a que la entrada/salida vayan en int8.
+    - ``representative_data``: iterable de arrays (N, ...) usado para calibrar
+      la cuantización. Si es ``None`` se usa un dataset aleatorio de prueba.
+
+    Devuelve el blob FlatBuffers listo para validar con
+    ``_verificar_firma_tfl3`` y empaquetar con ``_generar_header``.
+    """
+    import tensorflow as tf
+
+    converter = tf.lite.TFLiteConverter.from_keras_model(keras_model)
+    converter.optimizations = [tf.lite.Optimize.DEFAULT]
+    if quantize:
+        if representative_data is None:
+            representative_data = _representative_random(keras_model, 100)
+        converter.representative_dataset = _representative_wrapper(representative_data)
+        if full_int8:
+            converter.target_spec.supported_ops = [tf.lite.OpsSet.TFLITE_BUILTINS_INT8]
+            converter.inference_input_type = tf.int8
+            converter.inference_output_type = tf.int8
+
+    print("[tflite] Convirtiendo y cuantizando…")
+    blob = converter.convert()
+    _verificar_firma_tfl3(blob)
+    return blob
+
+
+def _representative_random(keras_model, samples: int):
+    """Muestras aleatorias 0..1 a partir de la forma de entrada (placeholder)."""
+    import numpy as np
+
+    input_shape = list(keras_model.inputs[0].shape)
+    if any(dim is None for dim in input_shape):
+        raise SystemExit(
+            "La entrada del modelo tiene dimensión dinámica (None). "
+            "Fija la forma o pasa explícitamente batch=1 antes de exportar."
+        )
+    sample_shape = input_shape[1:]
+    print(
+        "[datos] Sin dataset representativo: calibrando con muestras aleatorias "
+        "(solo prueba del pipeline)."
+    )
+    return np.random.default_rng(0).random((samples, *sample_shape))
+
+
+def _representative_wrapper(representative_data) -> Callable[[], list]:
+    """Envuelve un dataset (N, ...) en el generador que espera TF Lite."""
+    import numpy as np
+
+    muestras = np.asarray(representative_data, dtype=np.float32)
+
+    def generar():
+        for muestra in muestras:
+            yield [muestra]
+
+    return generar
 
 
 def _resumen(blob: bytes, args: argparse.Namespace) -> None:
@@ -221,8 +276,11 @@ def _resumen(blob: bytes, args: argparse.Namespace) -> None:
             f"zero_point={q_in['zero_points']}"
         )
     print(f"  Salida           : {salida['dtype']} {salida['shape']}")
-    cuantos_int8 = sum(1 for t in detalles if t["dtype"].itemsize == 1)
-    print(f"  Tensores int8    : {cuantos_int8} de {len(detalles)}")
+    cuantos = sum(
+        1 for t in detalles
+        if t["dtype"].itemsize == 1 or t["quantization"][0] != 0
+    )
+    print(f"  Tensores cuantiz : {cuantos} de {len(detalles)}")
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -243,20 +301,16 @@ def main(argv: list[str] | None = None) -> int:
     print(f"[modelo] Cargando '{modelo}' …")
     keras_model = tf.keras.models.load_model(str(modelo))
 
-    converter = tf.lite.TFLiteConverter.from_keras_model(keras_model)
-    converter.optimizations = [tf.lite.Optimize.DEFAULT]
-    if not args.no_quant:
-        converter.representative_dataset = _representative_dataset(keras_model, args)
-        if args.full_int8:
-            converter.target_spec.supported_ops = [tf.lite.OpsSet.TFLITE_BUILTINS_INT8]
-            converter.inference_input_type = tf.int8
-            converter.inference_output_type = tf.int8
-    # Sin --no-quant el modelo queda cuantizado a INT8 con I/O float, que es
-    # justo lo que el firmware alimenta con input->data.f[].
+    representative_data = None
+    if not args.no_quant and args.representative:
+        representative_data = _cargar_representative(args.representative, args.samples)
 
-    print("[tflite] Convirtiendo y cuantizando…")
-    blob = converter.convert()
-    _verificar_firma_tfl3(blob)
+    blob = _convertir_a_tflite(
+        keras_model,
+        quantize=not args.no_quant,
+        full_int8=args.full_int8,
+        representative_data=representative_data,
+    )
 
     if args.dry_run:
         print("[dry-run] Header NO escrito.")

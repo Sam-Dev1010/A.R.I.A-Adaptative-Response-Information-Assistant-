@@ -2,6 +2,7 @@
 #include <WiFi.h>
 #include <HTTPClient.h>
 #include "model_data.h"
+#include "features_data.h"
 #include "tensorflow/lite/micro/all_ops_resolver.h"
 #include "tensorflow/lite/micro/micro_error_reporter.h"
 #include "tensorflow/lite/micro/micro_interpreter.h"
@@ -39,6 +40,71 @@ bool isValidTFLiteModel() {
   return (g_model[4] == 'T' && g_model[5] == 'F' &&
           g_model[6] == 'L' && g_model[7] == '3');
 }
+
+// Longitud máxima de frase (bytes) usada para normalizar la feature 0.
+constexpr float kLongitudMax = 200.0f;
+
+// Buffer y longitud de la frase que se va acumulando por Serial.
+constexpr uint8_t kFraseMax = 200;
+static uint8_t frase[kFraseMax];
+static size_t fraseLen = 0;
+
+// Calcula las 64 features de entrada a partir de los bytes UTF-8 de una frase.
+// Debe coincidir 1:1 con extraer_features() en scripts/train_esp32_detector.py:
+//   - f[0]        : longitud normalizada (min(len,200)/200).
+//   - f[1..63]    : cuenta normalizada de los bigramas de bytes minúscula-
+//                   insensibles del vocabulario (features_data.h).
+// Los bytes de A..Z (ASCII de 1 byte) se pasan a minúscula; los bytes >=0x80
+// (caracteres multi-byte UTF-8) se dejan tal cual, igual que en Python.
+void calcular_features(const uint8_t* texto, size_t len, float* feats) {
+  for (int i = 0; i < kNumFeatures; i++) feats[i] = 0.0f;
+
+  size_t n = len < (size_t)kLongitudMax ? len : (size_t)kLongitudMax;
+  feats[0] = (float)n / kLongitudMax;
+
+  // Copia en minúscula (solo A..Z) de la frase, para contar bigramas.
+  static uint8_t minusc[kFraseMax];
+  size_t m = 0;
+  for (size_t i = 0; i < len && m < kFraseMax; i++) {
+    uint8_t b = texto[i];
+    if (b >= 0x41 && b <= 0x5A) b += 0x20;  // 'A'..'Z' -> 'a'..'z'
+    minusc[m++] = b;
+  }
+
+  for (int v = 0; v < kNumFeatures - 1; v++) {
+    uint8_t a = g_vocab_a[v];
+    uint8_t b = g_vocab_b[v];
+    int cuenta = 0;
+    for (size_t i = 0; i + 1 < m; i++) {
+      if (minusc[i] == a && minusc[i + 1] == b) cuenta++;
+    }
+    float val = (float)cuenta / (float)g_vocab_max[v];
+    feats[v + 1] = val > 1.0f ? 1.0f : val;  // recorte a [0,1] igual que Python
+  }
+}
+
+void limpiarFrase() {
+  fraseLen = 0;
+  frase[0] = '\0';
+}
+
+// Lee una frase completa de Serial (hasta '\n' o buffer lleno) y devuelve
+// true si hay algo que procesar. La frase queda en 'frase'/'fraseLen'.
+bool leerFraseSerial() {
+  while (Serial.available()) {
+    char c = (char)Serial.read();
+    if (c == '\n') {
+      if (fraseLen > 0) return true;   // línea completa con contenido
+      limpiarFrase();
+    } else if (c != '\r' && fraseLen < kFraseMax) {
+      frase[fraseLen++] = (uint8_t)c;
+      if (fraseLen >= kFraseMax) return true;  // buffer lleno
+    }
+  }
+  return false;
+}
+
+
 
 // Función para notificar a la API de A.R.I.A
 void notifyARIA(float score) {
@@ -132,6 +198,7 @@ void setup() {
   // LED fijo encendido = IA embebida 100% cargada y lista.
   digitalWrite(LED_PIN, HIGH);
   Serial.println("[OK] Sistema de IA embebida e intérprete inicializados.");
+  Serial.println("[IA] Escribe una frase y pulsa Enter para que el detector la evalúe.");
 }
 
 // ------------------------- Loop ------------------------------------------
@@ -148,33 +215,44 @@ void loop() {
 
   if (input == nullptr) return;
 
-  // --- 1. Lectura / Normalización de sensores --------------------------------
-  // TODO(sensores): mapear las lecturas reales (ADC, IMU, pulsos, sonido...)
-  // al rango que espera la red y copiarlas en input->data.f[].
-  //   Ejemplo con un divisor de tensión en GPIO34 (0..4095):
-  //     float v = (float)analogRead(34) / 4095.0f;
-  //     input->data.f[0] = (v - kMinLectura) / (kMaxLectura - kMinLectura);
-  // La forma del tensor (¿1 valor, N muestras, imágenes?) la define el modelo
-  // exportado; consulta input->dims y rellena cada dimensión.
-  // Por ahora se deja un valor de prueba normalizado (0..1):
-  input->data.f[0] = 0.85f;
+  // --- 1. Entrada de texto por Serial ----------------------------------------
+  // Envía la frase por el Serial Monitor (115200) terminada en Enter. El nodo
+  // detecta si la frase dispara una alerta (p. ej. un COMANDO) con la red
+  // local, sin depender del servidor.
+  if (!leerFraseSerial()) {
+    delay(20);
+    return;
+  }
 
-  // --- 2. Ejecución de Inferencia Local -------------------------------------
+  // --- 2. Extracción de features (bytes UTF-8 → 64 dims) ---------------------
+  float feats[kNumFeatures];
+  calcular_features(frase, fraseLen, feats);
+
+  Serial.printf("\n>> Frase recibida: %s\n", (char*)frase);
+
+  for (int i = 0; i < kNumFeatures; i++) {
+    input->data.f[i] = feats[i];
+  }
+
+  // --- 3. Ejecución de Inferencia Local -------------------------------------
   unsigned long start_time = millis();
   TfLiteStatus invoke_status = interpreter->Invoke();
   unsigned long latency = millis() - start_time;
 
   if (invoke_status == kTfLiteOk) {
     float prediction = output->data.f[0];
-    Serial.printf("Inferencia: %.4f | Latencia: %lu ms\n", prediction, latency);
+    Serial.printf("[IA] Frase=\"%s\" | P(COMANDO)=%.4f | Latencia: %lu ms\n",
+                  (char*)frase, prediction, latency);
 
-    // --- 3. Umbral de Activación ---------------------------------------------
+    // --- 4. Umbral de Activación ---------------------------------------------
     if (prediction > kUmbralAlerta) {
       avisarDeteccion(prediction);
+    } else {
+      Serial.println("  (frase ordinaria, sin alerta)");
     }
   } else {
     Serial.println("Error ejecutando la inferencia.");
   }
 
-  delay(3000);
+  limpiarFrase();
 }

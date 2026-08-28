@@ -417,9 +417,39 @@ palabra, un gesto, sonido...): la inferencia no depende del servidor.
   constantemente, el ESP32 lo corrige solo con histéresis (ve
   `kUmbralAlerta` en `src/main.cpp`).
 
-> Estado actual: `model_data.h` es un *placeholder* aún sin modelo real. Para
-> exportar el clasificador o una prueba, instala TensorFlow y ejecuta
-> `scripts/export_tflite.py` sobre el `.keras`/`.h5` correspondiente.
+> Estado actual: además del exportador genérico, el nodo trae un **detector de
+> frases ya entrenado** (ve abajo) que distingue cuándo dices un *comando* para
+> tu PC frente a una conversación normal, y avisa a A.R.I.A solo en ese caso.
+
+#### Detector de frases (¿es un COMANDO?)
+
+Avisa solo cuando le das una **orden** (p.ej. *"abre el navegador"*) y no cuando
+charlas. Entrena una red densa **64 → 32 → 1** sobre *n-gramas de bytes* que el
+ESP32 reproduce en C con `calcular_features()` (en `src/main.cpp`).
+
+- **Entrenar y exportar a la placa** — `scripts/train_esp32_detector.py`:
+
+  ```bash
+  # En el contenedor oficial de TF 2.19 (SELinux: añade :Z al montar el volumen)
+  docker run --rm -v $PWD:/work:Z tensorflow/tensorflow:2.19.0 \
+    python /work/scripts/train_esp32_detector.py --export
+  ```
+
+  Sin Docker: `pip install tensorflow numpy` y
+  `python scripts/train_esp32_detector.py --export`. Flags útiles:
+  `-d <dataset.json>` ({`texts`, `intents`}, por defecto `data/neural/training_data.json`),
+  `-o <outdir>` (artefactos: `.keras`, `calibracion.npy`, `features.json`, `.tflite`),
+  `-e <épocas>`, `--split`, `--seed`, `--dry-run`.
+
+- **Qué hace**: etiqueta como **positivo** cada frase cuya intención es
+  `COMANDO`; extrae 64 features en `[0,1]` (1 de longitud normalizada + 63
+  bigramas de bytes); entrena la red; valida la cuantización INT8 (MAE) y, con
+  `--export`, regenera `model_data.h` (modelo TFLite) y `features_data.h`
+  (vocabulario de bigramas, siempre con 63 slots para tamaño fijo en C).
+- Los artefactos huérfanos (`data/detector_esp32/`) están en `.gitignore`: no se
+  versionan; solo se commitan los headers del firmware que el build incluye.
+- Suite del detector: `pytest tests/test_detector.py` (extracción de features,
+  vocabulario determinista y etiquetado binario, sin necesidad de TensorFlow).
 
 ## Uso
 
