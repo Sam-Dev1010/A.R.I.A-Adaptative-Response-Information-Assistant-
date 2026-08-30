@@ -96,6 +96,8 @@ class BPETokenizer:
         for special, token_id in self.SPECIAL_TOKENS.items():
             self.vocab[special] = token_id
 
+        # Índice inverso id -> token, mantenido en O(1) durante el entrenamiento
+        self.id_to_token = {v: k for k, v in self.vocab.items()}
         next_id = len(self.SPECIAL_TOKENS)
 
         # Agregar bytes más frecuentes primero
@@ -103,6 +105,7 @@ class BPETokenizer:
             char = chr(byte_val) if byte_val < 128 else bytes([byte_val]).decode("utf-8", errors="replace")
             if char not in self.vocab:
                 self.vocab[char] = next_id
+                self.id_to_token[next_id] = char
                 next_id += 1
 
         # Paso 2: BPE merges
@@ -128,32 +131,30 @@ class BPETokenizer:
             new_id = next_id
             next_id += 1
 
-            self.merges.append((
+            pair_str = (
                 self._id_to_token_str(pair[0]),
                 self._id_to_token_str(pair[1]),
-            ))
-            self.vocab[f"{self._id_to_token_str(pair[0])}{self._id_to_token_str(pair[1])}"] = new_id
+            )
+            self.merges.append(pair_str)
+            merged_token = pair_str[0] + pair_str[1]
+            self.vocab[merged_token] = new_id
+            self.id_to_token[new_id] = merged_token
 
             # Aplicar merge a todos los textos
             all_ids = [self._merge(ids, pair, new_id) for ids in all_ids]
 
             if verbose and (merge_idx + 1) % 100 == 0:
                 print(f"  Merge {merge_idx + 1}/{num_merges}: "
-                      f"'{self._id_to_token_str(pair[0])}' + '{self._id_to_token_str(pair[1])}'")
+                      f"'{pair_str[0]}' + '{pair_str[1]}'")
 
-        # Construir reverse vocab
-        self.id_to_token = {v: k for k, v in self.vocab.items()}
         self._is_trained = True
 
         if verbose:
             print(f"  Vocabulario: {len(self.vocab)} tokens")
 
     def _id_to_token_str(self, token_id: int) -> str:
-        """Convierte un ID a string de forma segura."""
-        for char, tid in self.vocab.items():
-            if tid == token_id:
-                return char
-        return f"<{token_id}>"
+        """Convierte un ID a string en O(1) usando el índice inverso."""
+        return self.id_to_token.get(token_id, f"<{token_id}>")
 
     def encode(self, text: str) -> list[int]:
         """Codifica texto a secuencia de IDs."""

@@ -1,5 +1,6 @@
 """Construcción de los componentes de IA y herramientas a partir de Settings."""
 from app.ai.auto_curiosity import CuriosityEngine
+from app.ai.neural.brain import NeuralBrain
 from app.ai.orchestrator import AssistantOrchestrator
 from app.ai.personality import build_personality_prompt
 from app.ai.providers.base import LLMProvider
@@ -9,7 +10,6 @@ from app.ai.self_learner import SelfLearner
 from app.core.config import Settings, get_settings
 from app.core.logging import get_logger
 from app.memory.manager import MemoryManager
-from app.ai.neural.brain import NeuralBrain
 from app.tools.builtins import BUILTIN_TOOLS
 from app.tools.desktop_tools import (
     MediaControlTool,
@@ -17,7 +17,7 @@ from app.tools.desktop_tools import (
     OpenFolderTool,
     PlayMusicTool,
 )
-from app.tools.dev_tools import RunCommandTool
+from app.tools.dev_tools import RunCommandTool, SystemUpdateTool
 from app.tools.file_tools import (
     CreateFileTool,
     CreateFolderTool,
@@ -140,6 +140,7 @@ def build_tool_registry(
     registry.register(ReadFileTool())
     registry.register(DeletePathTool())
     registry.register(RunCommandTool())
+    registry.register(SystemUpdateTool())
     registry.register(PhoneCallTool())
     registry.register(WhatsAppTool())
     registry.register(SendEmailTool())
@@ -170,6 +171,37 @@ def build_tool_policy(settings: Settings | None = None) -> ToolPolicy:
     )
 
 
+def _register_brain_tools(
+    brain: NeuralBrain,
+    registry: ToolRegistry,
+) -> None:
+    """Exponer al cerebro neural las herramientas que puede ejecutar.
+
+    ``NeuralBrain.think()`` ejecuta los comandos que detecta en el mensaje
+    usando ``register_tools``. Sin esto, el cerebro del orquestador (y por
+    tanto el flujo por voz) no podría listar, leer, crear ni ejecutar nada.
+    """
+    brain.register_tools(
+        {
+            tool.name: tool
+            for tool in registry.all()
+            if tool.name
+            in {
+                "list_files",
+                "read_file",
+                "create_file",
+                "create_folder",
+                "delete_path",
+                "run_command",
+                "open_app",
+                "get_time",
+                "get_system_info",
+                "system_update",
+            }
+        }
+    )
+
+
 def build_neural_brain(settings: Settings | None = None) -> NeuralBrain | None:
     """Construye e inicializa el cerebro neural si está habilitado."""
     settings = settings or get_settings()
@@ -179,7 +211,9 @@ def build_neural_brain(settings: Settings | None = None) -> NeuralBrain | None:
     brain = NeuralBrain(settings.neural_data_dir)
     brain.initialize()
 
-    if settings.neural_auto_train:
+    # Solo se entrena si aún no hay un modelo entrenado. De lo contrario el
+    # arranque (p. ej. al encender el PC) se vuelve lentísimo re-entrenando.
+    if settings.neural_auto_train and not brain.is_trained():
         # Entrenar si hay datos de entrenamiento
         training_file = settings.neural_data_dir / "training_data.json"
         if training_file.exists():
@@ -212,6 +246,10 @@ def build_orchestrator(
     registry = build_tool_registry(settings, memory=memory, search_tool=search_tool)
     if memory is not None and provider is not None:
         registry.register(DeepStudyTool(provider, memory, search_tool.search))
+    if neural_brain is not None:
+        # El cerebro neural necesita sus propias herramientas para poder
+        # ejecutar comandos cuando no hay LLM (p. ej. el flujo por voz).
+        _register_brain_tools(neural_brain, registry)
 
     kwargs: dict = {
         "registry": registry,
@@ -250,3 +288,21 @@ def build_orchestrator(
 
                 kwargs["auto_learner"] = _aprender_todo
     return AssistantOrchestrator(**kwargs)
+
+
+def build_speaker_manager(settings: Settings | None = None):
+    """Construye el gestor de identificación de hablante (o None si está desactivado).
+
+    El import es perezoso para no cargar onnxruntime/speakeronnx a menos que la
+    identificación de voz esté realmente en uso.
+    """
+    settings = settings or get_settings()
+    if not settings.speaker_id_enabled:
+        return None
+    from app.voice.speaker_id import SpeakerIdManager  # import perezoso
+
+    return SpeakerIdManager(
+        storage_dir=settings.speaker_id_dir,
+        threshold=settings.speaker_id_threshold,
+        default_authority=settings.speaker_default_authority or settings.aria_creator_name,
+    )

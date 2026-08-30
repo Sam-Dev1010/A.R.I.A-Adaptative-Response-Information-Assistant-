@@ -86,6 +86,12 @@ class Settings(BaseSettings):
     tts_pitch: str = "+0Hz"  # sin cambios de tono: el pitch alto suena robótico
     wake_word: str = "aria"  # vacío = responder sin palabra de activación
 
+    # Identificación de hablante (quién le habla): 100 % local (speakeronnx)
+    speaker_id_enabled: bool = True          # deshabilita el análisis de voz
+    speaker_id_threshold: float = 0.55       # similitud mínima para dar por identificado
+    speaker_id_dir: Path = Path("data/speakers")  # donde guarda las huellas de voz
+    speaker_default_authority: str = ""      # vacío = se usará aria_creator_name
+
     # Acceso remoto: si se define, los WebSockets exigen ?token=… (fuera de casa)
     access_token: str = ""
 

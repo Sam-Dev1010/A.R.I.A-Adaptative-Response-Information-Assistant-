@@ -26,7 +26,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-from app.ai.factory import build_memory, build_orchestrator
+from app.ai.factory import build_memory, build_orchestrator, build_speaker_manager
 from app.core.config import get_settings
 from app.core.logging import setup_logging
 from app.voice.assistant import VoiceAssistant
@@ -87,6 +87,7 @@ async def main() -> None:
     )
     stt = GoogleSTTProvider(language=settings.stt_language)
     tts = build_tts_provider(settings)
+    speaker_manager = build_speaker_manager(settings)
 
     if not settings.llm_api_key:
         print("ADVERTENCIA: LLM_API_KEY vacía (configura .env si el proveedor la exige).")
@@ -99,6 +100,7 @@ async def main() -> None:
         language=settings.stt_language,
         active=True if (args.no_wake or args.start_active) else None,
         on_wake=lambda: asyncio.to_thread(_launch_interface),
+        speaker_manager=speaker_manager,
     )
     if assistant.active:
         print("SIA escuchando… Ctrl+C para salir.")

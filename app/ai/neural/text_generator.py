@@ -5,8 +5,8 @@ y generar texto coherente basado en el contexto.
 """
 import json
 import random
-from pathlib import Path
 from collections import defaultdict
+from pathlib import Path
 
 from app.ai.neural.tokenizer import Tokenizer
 

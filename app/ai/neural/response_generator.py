@@ -52,8 +52,8 @@ class ResponseGenerator:
 
     def _generate_greeting(self) -> str:
         """Genera un saludo según la hora."""
-        from datetime import datetime
-        hour = datetime.now().hour
+        from datetime import UTC, datetime
+        hour = datetime.now(UTC).astimezone().hour
 
         if 5 <= hour < 12:
             saludos = [

@@ -555,3 +555,103 @@ async def test_race_raises_when_all_fail(tmp_path):
 
     with pytest.raises(VoiceError):
         await race.synthesize("Hola", tmp_path / "out.mp3")
+
+
+# --- Identificación del hablante: autorización de órdenes ---
+
+
+class _AudioSTT(STTProvider):
+    """STT que también entrega audio (como GoogleSTTProvider.listen_with_audio)."""
+
+    name = "audio_stt"
+
+    def __init__(self, text: str, audio: bytes | None = None) -> None:
+        self._text = text
+        self._audio = audio or (b"\x00\x00" * 16000 * 2)
+
+    async def listen(self, *, language=None) -> str:
+        return self._text
+
+    async def listen_with_audio(self, *, language=None) -> tuple[str, bytes]:
+        return self._text, self._audio
+
+
+class _FakeSpeakerManager:
+    """Identifica de forma determinista a un hablante con un rol conocido."""
+
+    def __init__(self, speaker: str, *, authority: bool = False) -> None:
+        self._speaker = speaker
+        self._authority = authority
+        self.identified_audio: list[bytes] = []
+
+    async def identify(self, audio: bytes):
+        self.identified_audio.append(bytes(audio))
+        return self._speaker, 0.9
+
+    def is_authority(self, name: str) -> bool:
+        return self._authority
+
+
+@pytest.mark.asyncio
+async def test_order_denied_for_identified_non_authority():
+    tts = FakeTTS()
+    mgr = _FakeSpeakerManager("Ana", authority=False)
+    assistant = VoiceAssistant(
+        AssistantOrchestrator(EchoProvider()), _AudioSTT("aria ejecuta pwd"), tts,
+        speaker_manager=mgr,
+    )
+    await assistant.run_once(text="aria hola")
+
+    reply = await assistant.run_once()
+
+    assert "no está autorizado" in reply
+    assert "Ana" in reply
+    assert tts.spoken[-1] == reply
+    assert mgr.identified_audio  # se capturó e identificó la voz
+
+
+@pytest.mark.asyncio
+async def test_order_allowed_for_identified_authority():
+    tts = FakeTTS()
+    mgr = _FakeSpeakerManager("Samuel", authority=True)
+    assistant = VoiceAssistant(
+        AssistantOrchestrator(EchoProvider()), _AudioSTT("aria ejecuta pwd"), tts,
+        speaker_manager=mgr,
+    )
+    await assistant.run_once(text="aria hola")
+
+    reply = await assistant.run_once()
+
+    assert reply == "ARIA dice: ejecuta pwd"
+    assert tts.spoken[-1] == reply
+
+
+@pytest.mark.asyncio
+async def test_chat_allowed_for_identified_non_authority():
+    """Una pregunta normal (no una orden) no se veta aunque sea no-autoridad."""
+    tts = FakeTTS()
+    mgr = _FakeSpeakerManager("Ana", authority=False)
+    assistant = VoiceAssistant(
+        AssistantOrchestrator(EchoProvider()), _AudioSTT("aria qué hora es"), tts,
+        speaker_manager=mgr,
+    )
+    await assistant.run_once(text="aria hola")
+
+    reply = await assistant.run_once()
+
+    assert reply == "ARIA dice: qué hora es"
+
+
+@pytest.mark.asyncio
+async def test_greeting_uses_identified_speaker_name(monkeypatch):
+    tts = FakeTTS()
+    mgr = _FakeSpeakerManager("Samuel", authority=True)
+    assistant = VoiceAssistant(
+        AssistantOrchestrator(EchoProvider()), _AudioSTT("aria hola"), tts,
+        speaker_manager=mgr,
+    )
+
+    await assistant.run_once()
+
+    assert "Samuel" in tts.spoken[0]
+    assert "jefe" not in tts.spoken[0]

@@ -14,11 +14,21 @@ _READ_LIMIT = 8000  # caracteres máximos leídos de un archivo por llamada
 
 
 def safe_path(raw: str) -> Path:
-    """Resuelve una ruta (relativa al HOME) y garantiza que quede dentro de él."""
+    """Resuelve una ruta y garantiza que quede dentro del HOME del usuario.
+
+    Las rutas absolutas y con ~ se usan tal cual. Las relativas se resuelven
+    contra el directorio de trabajo actual (CWD) si apunta a algo existente
+    ahí; en caso contrario, contra el HOME. Así "lee el archivo README.md"
+    funciona desde la carpeta del proyecto y también desde el home.
+    """
     home = Path.home().resolve()
     candidate = Path(raw).expanduser()
     if not candidate.is_absolute():
-        candidate = home / candidate
+        cwd_candidate = Path.cwd() / candidate
+        if cwd_candidate.exists():
+            candidate = cwd_candidate
+        else:
+            candidate = home / candidate
     resolved = candidate.resolve()
     if resolved != home and home not in resolved.parents:
         raise ValueError(

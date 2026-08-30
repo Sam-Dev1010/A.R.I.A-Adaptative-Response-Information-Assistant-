@@ -5,7 +5,7 @@ sin depender de LLMs externos.
 """
 import re
 from dataclasses import dataclass, field
-from typing import Any
+from typing import Any, ClassVar
 
 
 @dataclass
@@ -30,7 +30,7 @@ class ReasoningEngine:
     """Motor de razonamiento con chain-of-thought."""
 
     # Patrones de preguntas que requieren razonamiento
-    REASONING_PATTERNS = {
+    REASONING_PATTERNS: ClassVar[dict[str, list[str]]] = {
         "comparison": [
             r"cuál es (mejor|peor|más|menor)",
             r"compara|comparación",
@@ -63,7 +63,7 @@ class ReasoningEngine:
     }
 
     # Plantillas de razonamiento por tipo
-    REASONING_TEMPLATES = {
+    REASONING_TEMPLATES: ClassVar[dict[str, list[str]]] = {
         "comparison": [
             "Para comparar {topic}, necesito considerar:",
             "Analizando las diferencias entre {options}:",

@@ -12,6 +12,10 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
+from app.core.logging import get_logger
+
+logger = get_logger("sia.semantic_memory")
+
 
 class SemanticMemory:
     """Memoria con búsqueda semántica usando TF-IDF simplificado."""
@@ -228,7 +232,8 @@ class SemanticMemory:
                 try:
                     doc_tfidf = json.loads(embedding_str.replace("'", '"'))
                     similarity = self._cosine_similarity(query_tfidf, doc_tfidf)
-                except Exception:
+                except Exception as exc:  # noqa: BLE001 - fallback ante embedding corrupto
+                    logger.debug("Embedding corrupto, similitud = 0: %s", exc)
                     similarity = 0.0
             else:
                 # Fallback: coincidencia de palabras
@@ -366,7 +371,8 @@ class SemanticMemory:
 
             try:
                 tfidf_a = json.loads(row_a["embedding"].replace("'", '"'))
-            except Exception:
+            except Exception as exc:  # noqa: BLE001 - memoria dañada, se omite
+                logger.debug("Embedding corrupto en consolidación AI: %s", exc)
                 continue
 
             for row_b in rows[i + 1:]:
@@ -375,7 +381,8 @@ class SemanticMemory:
 
                 try:
                     tfidf_b = json.loads(row_b["embedding"].replace("'", '"'))
-                except Exception:
+                except Exception as exc:  # noqa: BLE001 - memoria dañada, se omite
+                    logger.debug("Embedding corrupto en consolidación BJ: %s", exc)
                     continue
 
                 similarity = self._cosine_similarity(tfidf_a, tfidf_b)

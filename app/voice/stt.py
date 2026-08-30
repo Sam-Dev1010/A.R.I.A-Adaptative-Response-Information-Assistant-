@@ -61,6 +61,22 @@ class GoogleSTTProvider(STTProvider):
         logger.info("Voz transcrita", extra={"chars": len(text)})
         return text
 
+    async def listen_with_audio(
+        self, *, language: str | None = None
+    ) -> tuple[str, bytes]:
+        """Igual que :meth:`listen` pero devuelve además el audio PCM crudo capturado.
+
+        El segundo elemento son los bytes PCM (s16le, 16 kHz, mono) que el STT
+        grabó — útil para identificar qué persona está hablando (speaker_id).
+        """
+        audio = await asyncio.to_thread(self._record)
+        raw = audio.get_raw_data(convert_rate=None, convert_width=None)
+        text = await asyncio.to_thread(
+            self._transcribe, audio, language or self._language
+        )
+        logger.info("Voz transcrita", extra={"chars": len(text), "audio_bytes": len(raw)})
+        return text, bytes(raw)
+
     def transcribe_bytes(
         self,
         raw: bytes,

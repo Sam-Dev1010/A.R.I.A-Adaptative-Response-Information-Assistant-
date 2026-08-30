@@ -571,8 +571,8 @@ class NeuralBrain:
         ]):
             tool = self._tools.get("list_files")
             if tool:
-                # Intentar extraer path
-                path = self._extract_path(msg, [
+                # Intentar extraer path (del mensaje original para conservar el case)
+                path = self._extract_path(message, [
                     "qué hay en ", "carpetas de ", "archivos de ",
                     "lista los archivos de ", "muestra ",
                 ])
@@ -584,7 +584,7 @@ class NeuralBrain:
         if any(w in msg for w in ["lee ", "lee el archivo", "muestra el contenido"]):
             tool = self._tools.get("read_file")
             if tool:
-                path = self._extract_path(msg, [
+                path = self._extract_path(message, [
                     "lee el archivo ", "lee ", "muestra el contenido de ",
                 ])
                 if path:
@@ -596,53 +596,180 @@ class NeuralBrain:
         # --- EJECUTAR COMANDO ---
         if any(w in msg for w in ["ejecuta", "corre ", "run ", "instala"]):
             tool = self._tools.get("run_command")
-            if tool:
-                cmd = self._extract_command(msg)
-                if cmd:
-                    result = await tool.execute(command=cmd, timeout_seconds=30)
-                    return f"Comando ejecutado:\n{result}"
-                return "¿Qué comando quieres que ejecute?"
-            return "No puedo ejecutar comandos ahora."
+            if not tool:
+                return "No puedo ejecutar comandos ahora."
+            # "corre los tests" / "ejecuta los tests" -> pytest, no un comando suelto
+            if any(w in msg for w in ["tests", "test ", "las pruebas", "las pruebas unitarias", "pytest"]):
+                result = await tool.execute(command="python -m pytest -q", timeout_seconds=120)
+                return f"Resultado de los tests:\n{result}"
+            # "instala actualizaciones" / "corre las actualizaciones" -> actualizar sistema
+            if "actualizacion" in msg or "actualizaciones" in msg or "update" in msg:
+                upd = self._tools.get("system_update")
+                if upd:
+                    result = await upd.execute(mode="upgrade_all", target="")
+                    return f"Actualización:\n{result}"
+            cmd = self._extract_command(message)
+            if cmd:
+                result = await tool.execute(command=cmd, timeout_seconds=30)
+                return f"Comando ejecutado:\n{result}"
+            return "¿Qué comando quieres que ejecute?"
 
         # --- CREAR ARCHIVO ---
-        if any(w in msg for w in ["crea un archivo", "guarda", "crea el archivo"]):
+        if any(w in msg for w in ["crea un archivo", "crea el archivo", "crea archivo", "guarda el archivo", "guarda"]):
             tool = self._tools.get("create_file")
             if tool:
-                # Preguntar qué crear
-                return "¿Qué nombre y contenido quieres para el archivo?"
+                resto = message
+                contenido = ""
+                for sep in ["con el contenido ", "con el texto ", "que contenga ", "que diga ", "que diga: "]:
+                    if sep in msg:
+                        contenido = message.split(sep, 1)[1].strip()
+                        resto = message.split(sep, 1)[0]
+                        break
+                nombre = resto
+                for pref in ["crea el archivo ", "crea un archivo ", "crea archivo ",
+                             "guarda el archivo ", "guarda "]:
+                    if pref in resto.lower():
+                        nombre = resto.lower().split(pref, 1)[1]  # índice en lowercase
+                        # recuperar el case original desde `resto` usando la misma posición
+                        pos = resto.lower().find(pref) + len(pref)
+                        nombre = resto[pos:].strip()
+                        break
+                nombre = nombre.strip().strip("\"'").strip()
+                if not nombre:
+                    return "¿Qué nombre quieres para el archivo?"
+                if not contenido:
+                    # Si el usuario dio nombre pero ningún contenido, crear vacío.
+                    resultado = await tool.execute(path=nombre, content="")
+                    return f"{resultado} (sin contenido). ¿Quieres que le agregue algo?"
+                resultado = await tool.execute(path=nombre, content=contenido)
+                return resultado
             return "No puedo crear archivos ahora."
 
         # --- ABRIR APLICACIÓN ---
         if any(w in msg for w in ["abre ", "abre el ", "abre la "]):
             tool = self._tools.get("open_app")
             if tool:
-                app = self._extract_path(msg, ["abre la ", "abre el ", "abre "])
+                app = self._extract_path(message, ["abre la ", "abre el ", "abre "])
                 if app:
+                    resultado = self._resolve_app_generic(app)
+                    if resultado is not None:
+                        return resultado
                     result = await tool.execute(app=app)
                     return result
                 return "¿Qué aplicación quieres que abra?"
             return "No puedo abrir aplicaciones ahora."
 
-        # --- HORA ---
-        if any(w in msg for w in ["hora", "qué hora es"]):
+        # --- HORA / FECHA ---
+        if any(w in msg for w in ["hora", "qué fecha", "qué día", "que fecha", "que día", "fecha es", "día es"]):
             from datetime import datetime
             now = datetime.now()  # noqa: DTZ005
+            if any(w in msg for w in ["fecha", "día", "dia", "año", "años"]):
+                return f"Hoy es {now.strftime('%A %d de %B de %Y')}."
             return f"Son las {now.strftime('%H:%M')}."
 
         # --- INFO SISTEMA ---
-        if any(w in msg for w in ["sistema", "info del sistema", "qué computadora"]):
+        if any(w in msg for w in ["sistema", "info del sistema", "qué computadora", "versión de python", "especificaciones"]):
+            tool = self._tools.get("get_system_info")
+            if tool:
+                result = await tool.execute()
+                return f"Info del sistema:\n{result}"
             tool = self._tools.get("run_command")
             if tool:
                 result = await tool.execute(command="uname -a && python3 --version")
                 return f"Info del sistema:\n{result}"
 
+        # --- ACTUALIZAR SISTEMA / APPS ---
+        if any(w in msg for w in ["actualiza", "actualizar", "updates", "update ", "actualizaciones", "instala actualizaciones"]):
+            tool = self._tools.get("system_update")
+            if tool:
+                target = ""
+                # Si piden una app concreta: "actualiza firefox"
+                app_name = self._extract_path(message, ["actualiza la app ", "actualiza el ", "actualiza la ", "actualiza ", "actualizar "])
+                if app_name and app_name not in ("sistema", "sistema operativo", "sistema y apps", "todas las apps"):
+                    target = app_name
+                result = await tool.execute(mode="upgrade_all", target=target)
+                return f"Actualización:\n{result}"
+            return "No puedo actualizar el sistema ahora."
+
+        # --- GIT STATUS / ESTADO DEL REPO ---
+        if any(w in msg for w in ["git status", "estado de git", "que cambié", "qué cambié", "cambios en git", "estado del repositorio"]):
+            tool = self._tools.get("run_command")
+            if tool:
+                result = await tool.execute(command="git status --short", timeout_seconds=20)
+                return f"Estado del repositorio:\n{result}"
+
+        # --- CORRER TESTS ---
+        if any(w in msg for w in ["corre los tests", "ejecuta los tests", "corre los test", "ejecuta los test", "corre las pruebas", "run tests", "run test", "pytest"]):
+            tool = self._tools.get("run_command")
+            if tool:
+                result = await tool.execute(command="python -m pytest -q", timeout_seconds=120)
+                return f"Resultado de los tests:\n{result}"
+
+        # --- BORRAR ARCHIVO O CARPETA ---
+        if any(w in msg for w in ["borra el archivo", "borra la carpeta", "elimina el archivo", "elimina la carpeta", "borra ", "elimina "]):
+            tool = self._tools.get("delete_path")
+            if tool:
+                path = self._extract_path(message, ["borra el archivo ", "borra la carpeta ", "elimina el archivo ", "elimina la carpeta ", "borra ", "elimina "])
+                if path:
+                    result = await tool.execute(path=path)
+                    return f"Eliminación:\n{result}"
+                return "¿Qué archivo o carpeta quieres que borre?"
+            return "No puedo borrar nada ahora."
+
+        # --- CREAR CARPETA ---
+        if any(w in msg for w in ["crea la carpeta", "crea una carpeta", "crea el directorio", "haz la carpeta", "crea carpeta"]):
+            tool = self._tools.get("create_folder")
+            if tool:
+                path = self._extract_path(message, ["crea la carpeta ", "crea una carpeta ", "crea el directorio ", "haz la carpeta ", "crea carpeta "])
+                if path:
+                    result = await tool.execute(path=path)
+                    return f"Carpeta:\n{result}"
+                return "¿Qué nombre quieres para la carpeta?"
+            return "No puedo crear carpetas ahora."
+
+        return None
+
+    def _resolve_app_generic(self, app: str) -> str | None:
+        """Mapea términos genéricos de apps a una acción real.
+
+        Si el usuario pide "el navegador", "el explorador de archivos" o
+        "la terminal" sin decir un nombre concreto, resolvemos a la app real
+        del sistema. Devuelve None si no es un término genérico conocido.
+        """
+        import shutil
+        import subprocess
+
+        a = "".join(ch for ch in app.lower() if ch.isalnum() or ch.isspace()).strip()
+        if a in ("navegador", "browser", "navegador web", "explorador web", "internet"):
+            subprocess.Popen(["xdg-open", "about:blank"])
+            return "Abriendo el navegador por defecto."
+        gestores = ("nautilus", "nemo", "dolphin", "thunar", "pcmanfm")
+        if a in ("explorador", "explorador de archivos", "gestor de archivos", "archivos", "files"):
+            for gestor in gestores:
+                if shutil.which(gestor):
+                    subprocess.Popen([shutil.which(gestor)])
+                    return f"Abriendo el explorador de archivos ({gestor})."
+            return "Abriendo el explorador de archivos por defecto."
+        if a in ("terminal", "consola", "terminal de comandos", "consola de comandos"):
+            for term in ("gnome-terminal", "konsole", "xfce4-terminal", "kitty", "alacritty", "xterm"):
+                if shutil.which(term):
+                    subprocess.Popen([shutil.which(term)])
+                    return f"Abriendo la terminal ({term})."
         return None
 
     def _extract_path(self, msg: str, prefixes: list[str]) -> str | None:
-        """Extrae un path del mensaje eliminando prefijos comunes."""
+        """Extrae un path del mensaje eliminando prefijos comunes.
+
+        La búsqueda de prefijos es insensible a mayúsculas, pero el fragmento
+        extraído conserva el case original del usuario (importante en Linux,
+        donde README.md != readme.md).
+        """
+        msg_lower = msg.lower()
         for prefix in prefixes:
-            if prefix in msg:
-                path = msg.split(prefix, 1)[1].strip()
+            low = prefix.lower()
+            if low in msg_lower:
+                start = msg_lower.index(low) + len(prefix)
+                path = msg[start:].strip()
                 # Limpiar puntuación y palabras extra
                 path = path.rstrip("?.!,").strip()
                 if path:
@@ -650,10 +777,12 @@ class NeuralBrain:
         return None
 
     def _extract_command(self, msg: str) -> str | None:
-        """Extrae el comando a ejecutar del mensaje."""
+        """Extrae el comando a ejecutar del mensaje (conservando el case)."""
+        msg_lower = msg.lower()
         for prefix in ["ejecuta ", "ejecuta el comando ", "corre ", "run ", "instala "]:
-            if prefix in msg:
-                cmd = msg.split(prefix, 1)[1].strip()
+            if prefix in msg_lower:
+                start = msg_lower.index(prefix) + len(prefix)
+                cmd = msg[start:].strip()
                 cmd = cmd.rstrip("?.!,").strip()
                 if cmd:
                     return cmd
@@ -794,8 +923,13 @@ class NeuralBrain:
         return history
 
     def _train_from_data(self) -> None:
-        """Entrena el modelo con los datos cargados."""
-        if self._training_data.get("texts"):
+        """Entrena el modelo con los datos cargados.
+
+        Solo entrena si aún no hay un clasificador entrenado: así el arranque
+        (p. ej. al encender el PC) carga el modelo guardado en vez de
+        re-entrenar cada vez.
+        """
+        if not self._is_trained and self._training_data.get("texts"):
             self.train(epochs=20)
 
     def is_trained(self) -> bool:

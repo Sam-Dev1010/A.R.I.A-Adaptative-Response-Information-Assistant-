@@ -52,9 +52,7 @@ class GPTTrainer:
 
         if all_texts and not self.tokenizer._is_trained:
             tokenizer_texts = list(all_texts)
-            for text in all_texts:
-                for word in text.split():
-                    tokenizer_texts.append(word)
+            tokenizer_texts.extend(word for text in all_texts for word in text.split())
             self.tokenizer.train(tokenizer_texts, verbose=False)
 
         for conv in conversations:
@@ -89,9 +87,7 @@ class GPTTrainer:
         """Entrena con texto puro (continuation learning)."""
         if texts and not self.tokenizer._is_trained:
             tokenizer_texts = list(texts)
-            for text in texts:
-                for word in text.split():
-                    tokenizer_texts.append(word)
+            tokenizer_texts.extend(word for text in texts for word in text.split())
             self.tokenizer.train(tokenizer_texts, verbose=False)
 
         training_sequences = []

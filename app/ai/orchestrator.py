@@ -227,7 +227,7 @@ class AssistantOrchestrator:
             response = await self._neural_brain.think(user_message)
             return response
 
-        except Exception as e:
+        except Exception as e:  # noqa: BLE001 - fallback definido: ante cualquier fallo local, usar el LLM
             logger.debug("Neural brain falló: %s", e)
             return None
 
