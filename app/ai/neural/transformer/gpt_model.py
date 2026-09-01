@@ -213,11 +213,13 @@ class GPTModel:
             if vocab_mask_size and 0 < vocab_mask_size < len(next_logits):
                 for i in range(vocab_mask_size, len(next_logits)):
                     next_logits[i] = float("-inf")
-                if vocab_mask_size > 1:
-                    # <unk>, <bos>, <user>, <assistant>: tokens de control, no se emiten
-                    for ctl_id in (1, 2, 5, 6):
-                        if ctl_id < vocab_mask_size:
-                            next_logits[ctl_id] = float("-inf")
+            # Siempre excluir tokens de control/relleno: <unk>, <bos>, <user>,
+            # <assistant>. Antes esto solo se aplicaba cuando el vocabulario real
+            # era más pequeño que el del modelo; al ser iguales (caso normal), el
+            # modelo colapsaba emitiendo <unk> repetido y nada se generaba.
+            for ctl_id in (1, 2, 5, 6):
+                if ctl_id < len(next_logits):
+                    next_logits[ctl_id] = float("-inf")
 
             if temperature > 0:
                 next_logits = [v / temperature for v in next_logits]

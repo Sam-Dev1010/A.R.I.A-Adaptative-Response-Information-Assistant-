@@ -59,6 +59,20 @@ def test_generate_respeta_mascara_de_vocabulario():
     assert not any(i in (1, 5, 6) for i in nuevos)
 
 
+def test_generate_siempre_excluye_control_con_vocab_completo():
+    # Regresión: cuando vocab_mask_size == vocab del modelo (caso real), el
+    # modelo NO debe emitir <unk> (1) ni los tokens de control (<bos>, <user>,
+    # <assistant>). Antes colapsaba emitiendo <unk> repetido.
+    modelo = _modelo_tiny()
+    random.seed(11)
+    ids = modelo.generate([5, 8, 6], max_new_tokens=20, temperature=0.6,
+                          vocab_mask_size=64)
+    nuevos = ids[3:]
+    assert len(nuevos) > 0
+    assert not any(i in (1, 2, 5, 6) for i in nuevos)
+    assert all(0 <= i < 64 for i in nuevos)
+
+
 def test_generate_min_new_tokens_evita_corte_temprano():
     modelo = _modelo_tiny()
     random.seed(7)
