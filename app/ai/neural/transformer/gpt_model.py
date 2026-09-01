@@ -8,6 +8,8 @@ import math
 import random
 from pathlib import Path
 
+import numpy as np
+
 from app.ai.neural.transformer.blocks import (
     Embedding,
     Linear,
@@ -15,6 +17,11 @@ from app.ai.neural.transformer.blocks import (
     _layer_norm_backward,
     _layer_norm_forward,
 )
+
+
+def _to_list(w):
+    """Convierte ndarray o lista a lista Python (para JSON)."""
+    return w.tolist() if isinstance(w, np.ndarray) else w
 
 
 class GPTModel:
@@ -37,17 +44,16 @@ class GPTModel:
 
         self.token_embed = Embedding(vocab_size, embed_dim)
 
-        self.pos_embed_weight = []
-        for _ in range(max_seq_len):
-            self.pos_embed_weight.append([random.gauss(0, 0.02) for _ in range(embed_dim)])
+        rng = np.random.default_rng()
+        self.pos_embed_weight = rng.normal(0.0, 0.02, size=(max_seq_len, embed_dim)).astype(np.float64)
 
         self.blocks = [
             TransformerBlock(embed_dim, num_heads, ff_mult)
             for _ in range(num_layers)
         ]
 
-        self.ln_gamma = [1.0] * embed_dim
-        self.ln_beta = [0.0] * embed_dim
+        self.ln_gamma = np.ones(embed_dim, dtype=np.float64)
+        self.ln_beta = np.zeros(embed_dim, dtype=np.float64)
         self.lm_head = Linear(embed_dim, vocab_size)
 
         self._cache_pos = 0
@@ -62,16 +68,22 @@ class GPTModel:
         # Token embeddings
         x = self.token_embed.forward(token_ids)
 
-        # Positional embeddings
+        # Positional embeddings (vectorizado con NumPy)
         start_pos = self._cache_pos if use_cache else 0
-        for i in range(seq_len):
-            pos = start_pos + i
-            if pos < self.max_seq_len:
-                for j in range(self.embed_dim):
-                    x[i][j] += self.pos_embed_weight[pos][j]
+        xa = np.asarray(x, dtype=np.float64)
+        pos_weights = np.asarray(self.pos_embed_weight, dtype=np.float64)
+        pos_idx = start_pos + np.arange(seq_len)
+        # El forward original solo suma la embedding posicional si pos < max_seq_len
+        valid = pos_idx < self.max_seq_len
+        if valid.all():
+            xa += pos_weights[pos_idx]
+        else:
+            xa[valid] += pos_weights[pos_idx[valid]]
 
         if use_cache:
             self._cache_pos += seq_len
+
+        x = xa.tolist()
 
         # Transformer blocks
         for block in self.blocks:
@@ -115,42 +127,38 @@ class GPTModel:
         if not positions:
             return 0.0
 
-        # 1) Gradiente de cross-entropy + softmax por posición y actualizar lm_head
-        d_input = [[0.0] * self.embed_dim for _ in positions]
-        total_loss = 0.0
-        for n, i in enumerate(positions):
-            max_l = max(logits[i])
-            exp_l = [math.exp(v - max_l) for v in logits[i]]
-            total_exp = sum(exp_l)
-            probs = [v / total_exp for v in exp_l]
-            total_loss -= math.log(probs[target_ids[i]] + 1e-10)
+        # 1) Cross-entropy + softmax vectorizado; actualización SGD correcta del lm_head
+        #    (primero se calcula TODO el gradiente con los pesos originales y luego se
+        #     actualizan una sola vez, sin mezclar propagación con descenso).
+        Log = np.asarray([logits[i] for i in positions], dtype=np.float64)      # [P, vocab]
+        max_l = Log.max(axis=1, keepdims=True)
+        exp_l = np.exp(Log - max_l)
+        Pmat = exp_l / exp_l.sum(axis=1, keepdims=True)                          # [P, vocab]
+        tgt = np.asarray(target_ids, dtype=np.int64)[positions]                 # [P]
+        row_idx = np.arange(Pmat.shape[0])
+        total_loss = -np.log(Pmat[row_idx, tgt] + 1e-10).mean()
 
-            grad = [probs[j] for j in range(len(probs))]
-            grad[target_ids[i]] -= 1.0
+        Grad = Pmat.copy()                                                       # [P, vocab]
+        Grad[row_idx, tgt] -= 1.0
+        Grad /= Pmat.shape[0]                                                    # gradiente de la loss media
 
-            xin = ln_out[i]
-            weight = self.lm_head.weight
-            # dW += grad . xin ; dX += grad . W
-            for f in range(self.embed_dim):
-                wf = weight[f]
-                grad_input = 0.0
-                for v in range(self.vocab_size):
-                    grad_input += grad[v] * wf[v]
-                    wf[v] -= lr * grad[v] * xin[f]
-                d_input[n][f] = grad_input
+        Xin = np.asarray([ln_out[i] for i in positions], dtype=np.float64)       # [P, embed]
+        d_input = Grad @ self.lm_head.weight.T                                   # [P, embed]
+        self.lm_head.weight -= lr * (Xin.T @ Grad)                               # [embed, vocab]
 
-        total_loss /= len(positions)
-
-        # 2) LayerNorm final por posición
-        dx_final = []
-        for n, i in enumerate(positions):
-            dx, dgamma, dbeta = _layer_norm_backward(
-                d_input[n], ln_xnorm[i], self.ln_gamma, ln_std[i]
-            )
-            for f in range(self.embed_dim):
-                self.ln_gamma[f] -= lr * dgamma[f]
-                self.ln_beta[f] -= lr * dbeta[f]
-            dx_final.append(dx)
+        # 2) LayerNorm final por posición (vectorizado), actualización SGD una sola vez
+        Xnorm = np.asarray([ln_xnorm[i] for i in positions], dtype=np.float64)   # [P, embed]
+        stds = np.asarray([ln_std[i] for i in positions], dtype=np.float64)      # [P]
+        gamma = self.ln_gamma
+        dGrad_norm = d_input * gamma[None, :]
+        dvar = (dGrad_norm * Xnorm).sum(axis=1) * (-0.5) / (stds ** 3)           # [P]
+        dmean = dGrad_norm.sum(axis=1) * (-1.0) / stds + dvar * (-2.0 * Xnorm).sum(axis=1) / self.embed_dim
+        dx_final = dGrad_norm / stds[:, None] + (dvar[:, None] * 2.0 * Xnorm) / self.embed_dim + dmean[:, None] / self.embed_dim
+        dgamma = (d_input * Xnorm).sum(axis=0)                                   # [embed]
+        dbeta = d_input.sum(axis=0)                                              # [embed]
+        self.ln_gamma -= lr * dgamma
+        self.ln_beta -= lr * dbeta
+        dx_final = dx_final.tolist()
 
         # 3) Bloques transformer en orden inverso (solo entrenamiento, sin cache)
         for block in reversed(self.blocks):
@@ -279,25 +287,25 @@ class GPTModel:
                 "num_layers": self.num_layers,
                 "max_seq_len": self.max_seq_len,
             },
-            "token_embed": self.token_embed.weight,
-            "pos_embed": self.pos_embed_weight,
-            "ln_gamma": self.ln_gamma,
-            "ln_beta": self.ln_beta,
-            "lm_head_weight": self.lm_head.weight,
+            "token_embed": _to_list(self.token_embed.weight),
+            "pos_embed": _to_list(self.pos_embed_weight),
+            "ln_gamma": _to_list(self.ln_gamma),
+            "ln_beta": _to_list(self.ln_beta),
+            "lm_head_weight": _to_list(self.lm_head.weight),
         }
         block_states = []
         for block in self.blocks:
             bs = {
-                "ln1_gamma": block.ln1_gamma,
-                "ln1_beta": block.ln1_beta,
-                "ln2_gamma": block.ln2_gamma,
-                "ln2_beta": block.ln2_beta,
-                "attn_q": block.attn.q_proj.weight,
-                "attn_k": block.attn.k_proj.weight,
-                "attn_v": block.attn.v_proj.weight,
-                "attn_out": block.attn.out_proj.weight,
-                "ff_fc1": block.ff.fc1.weight,
-                "ff_fc2": block.ff.fc2.weight,
+                "ln1_gamma": _to_list(block.ln1_gamma),
+                "ln1_beta": _to_list(block.ln1_beta),
+                "ln2_gamma": _to_list(block.ln2_gamma),
+                "ln2_beta": _to_list(block.ln2_beta),
+                "attn_q": _to_list(block.attn.q_proj.weight),
+                "attn_k": _to_list(block.attn.k_proj.weight),
+                "attn_v": _to_list(block.attn.v_proj.weight),
+                "attn_out": _to_list(block.attn.out_proj.weight),
+                "ff_fc1": _to_list(block.ff.fc1.weight),
+                "ff_fc2": _to_list(block.ff.fc2.weight),
             }
             block_states.append(bs)
         state["blocks"] = block_states
@@ -315,13 +323,13 @@ class GPTModel:
 
         self.token_embed.vocab_size = self.vocab_size
         self.token_embed.embed_dim = self.embed_dim
-        self.token_embed.weight = state["token_embed"]
-        self.pos_embed_weight = state["pos_embed"]
-        self.ln_gamma = state["ln_gamma"]
-        self.ln_beta = state["ln_beta"]
+        self.token_embed.weight = np.asarray(state["token_embed"], dtype=np.float64)
+        self.pos_embed_weight = np.asarray(state["pos_embed"], dtype=np.float64)
+        self.ln_gamma = np.asarray(state["ln_gamma"], dtype=np.float64)
+        self.ln_beta = np.asarray(state["ln_beta"], dtype=np.float64)
         self.lm_head.in_features = self.embed_dim
         self.lm_head.out_features = self.vocab_size
-        self.lm_head.weight = state["lm_head_weight"]
+        self.lm_head.weight = np.asarray(state["lm_head_weight"], dtype=np.float64)
 
         self.blocks = [
             TransformerBlock(self.embed_dim, self.num_heads)
@@ -329,16 +337,16 @@ class GPTModel:
         ]
         for i, bs in enumerate(state["blocks"]):
             block = self.blocks[i]
-            block.ln1_gamma = bs["ln1_gamma"]
-            block.ln1_beta = bs["ln1_beta"]
-            block.ln2_gamma = bs["ln2_gamma"]
-            block.ln2_beta = bs["ln2_beta"]
-            block.attn.q_proj.weight = bs["attn_q"]
-            block.attn.k_proj.weight = bs["attn_k"]
-            block.attn.v_proj.weight = bs["attn_v"]
-            block.attn.out_proj.weight = bs["attn_out"]
-            block.ff.fc1.weight = bs["ff_fc1"]
-            block.ff.fc2.weight = bs["ff_fc2"]
+            block.ln1_gamma = np.asarray(bs["ln1_gamma"], dtype=np.float64)
+            block.ln1_beta = np.asarray(bs["ln1_beta"], dtype=np.float64)
+            block.ln2_gamma = np.asarray(bs["ln2_gamma"], dtype=np.float64)
+            block.ln2_beta = np.asarray(bs["ln2_beta"], dtype=np.float64)
+            block.attn.q_proj.weight = np.asarray(bs["attn_q"], dtype=np.float64)
+            block.attn.k_proj.weight = np.asarray(bs["attn_k"], dtype=np.float64)
+            block.attn.v_proj.weight = np.asarray(bs["attn_v"], dtype=np.float64)
+            block.attn.out_proj.weight = np.asarray(bs["attn_out"], dtype=np.float64)
+            block.ff.fc1.weight = np.asarray(bs["ff_fc1"], dtype=np.float64)
+            block.ff.fc2.weight = np.asarray(bs["ff_fc2"], dtype=np.float64)
 
     def count_params(self) -> int:
         params = 0
