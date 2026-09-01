@@ -96,37 +96,44 @@ def fetch_by_topic(topic: str) -> dict[str, str] | None:
     return {"tema": title, "texto": extract.strip()}
 
 
+# Longitud mínima (caracteres) del extracto para considerarlo aprendizaje útil.
+MIN_EXTRACT_LEN = 200
+
+
 def _split_sentences(text: str) -> list[str]:
-    """Divide texto en oraciones (aproximado, para construir Q&A)."""
+    """Divide texto en oraciones completas (terminadas en . ! ?)."""
     import re
 
     parts = re.split(r"(?<=[.!?])\s+", text.strip())
-    return [p for p in parts if len(p.split()) >= 6]
+    return [p for p in parts if len(p.split()) >= 6 and p[-1:] in ".!?"]
 
 
 def build_pairs(article: dict[str, str], max_pairs: int = 3) -> list[dict[str, str]]:
-    """Convierte un artículo en pares pregunta→respuesta naturales y variados."""
+    """Convierte un artículo en pares pregunta→respuesta naturales y variados.
+
+    Solo se usa un extracto suficientemente largo (evita ruido de artículos
+    diminutos). Genera una única pregunta general con la respuesta completa y,
+    si el extracto tiene oraciones completas, hasta `max_pairs` preguntas de
+    detalle. No se generan variantes casi-duplicadas de la misma pregunta.
+    """
     tema = article.get("tema", "").strip()
     texto = article.get("texto", "").strip()
-    if not texto:
+    if not texto or len(texto) < MIN_EXTRACT_LEN:
         return []
 
     pairs: list[dict[str, str]] = []
 
-    # 1. Respuestas generales sobre el tema a partir de todo el extracto.
-    for q in QUESTION_PATTERNS:
-        if len(pairs) >= max_pairs:
-            break
-        pairs.append({"user": q.format(tema=tema), "assistant": texto})
+    # 1. Una sola pregunta general con el extracto completo (no variantes duplicadas).
+    pairs.append({"user": f"¿Qué es {tema}?", "assistant": texto})
+    pairs.append({"user": "Cuéntame sobre {tema}".format(tema=tema), "assistant": texto})
 
-    # 2. Si el extracto es largo, preguntas sobre detalles concretos.
+    # 2. Preguntas de detalle solo con oraciones completas.
     sentences = _split_sentences(texto)
-    if len(sentences) >= 2 and len(pairs) < max_pairs * 2:
-        for i, sent in enumerate(sentences):
-            if len(pairs) >= max_pairs * 2:
+    if len(sentences) >= 2:
+        for sent in sentences:
+            if len(pairs) >= max_pairs + 2:
                 break
-            pregunta = f"¿Puedes explicarme mejor qué es {tema}?"
-            pairs.append({"user": pregunta, "assistant": sent})
+            pairs.append({"user": f"Explícame más sobre {tema}", "assistant": sent})
 
     return pairs
 
@@ -181,6 +188,13 @@ def main() -> None:
 
         tema = article["tema"]
         texto = article["texto"]
+
+        # Saltar extractos demasiado cortos (aportan más ruido que conocimiento).
+        if len(texto) < MIN_EXTRACT_LEN:
+            if args.verboso:
+                print(f"  [{i+1}/{args.articulos}] '{tema}' (extracto corto, omitido)")
+            time.sleep(1)
+            continue
 
         # Acumular texto de conocimiento (siempre).
         if texto not in corpus["extra_texts"]:
