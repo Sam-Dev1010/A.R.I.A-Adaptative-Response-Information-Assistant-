@@ -502,7 +502,25 @@ class NeuralBrain:
             else:
                 run = 1
             prev = ch
-        return seq < 6
+        if seq >= 6:
+            return False
+        # Rechazar bucles de generación: repetición de bigramas de caracteres
+        # (ej: "queruscopermiByquerusco...") o de palabras (ej: "adir al suyo el
+        # nombre de adir al suyo el nombre de..."). Sin esto, el GPT local
+        # degenerado pasaría el guardián y ARIA hablaría basura.
+        chars = [c for c in response.lower() if c.isalnum()]
+        if len(chars) >= 8:
+            bigrams_total = len(chars) - 1
+            bigrams_uniq = len(set(zip(chars, chars[1:])))
+            if bigrams_uniq and bigrams_total / bigrams_uniq > 1.5:
+                return False
+        tokens = [w for w in response.lower().split() if any(c.isalnum() for c in w)]
+        if len(tokens) >= 4:
+            words_total = len(tokens) - 1
+            words_uniq = len(set(zip(tokens, tokens[1:])))
+            if words_uniq and words_total / words_uniq > 2.0:
+                return False
+        return True
 
     def train_gpt(
         self,

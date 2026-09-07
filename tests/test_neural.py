@@ -112,6 +112,21 @@ def test_usable_response_rechaza_basura(tmp_path):
     assert not brain._is_usable_response("a b")
 
 
+def test_usable_response_rechaza_bucles_de_generacion(tmp_path):
+    # Degeneración real observada en el GPT local: bucles de fragmentos que
+    # antes PASABAN el guardián (ARIA hablaría basura en vez de usar el fallback).
+    brain = _brain_tmp(tmp_path)
+    bucles = [
+        "ArminwareArminconcisconcisconcisconcisArmincompetieste Armincompeti",
+        "a, a, queruscopermiByqueruscoqueruscopermiBya, queruscopermiByhistoriadorh. Spermi. Spermi",
+        "puedes hacer?ArminqprogramqcansqcansbasbasbasbasbasbasbasbasbasbasManc",
+        "adir al suyo el nombre de adir al suyo el nombre de adir al suyo el nombre de adir al suyo el nombre",
+        "queruscopermipermidetalles.lo.queruscopermiPuedes mostrarme el permidetalles.Puedes mostrarme el permidetalles",
+    ]
+    for t in bucles:
+        assert not brain._is_usable_response(t), f"no se detectó bucle: {t[:40]!r}"
+
+
 # --- Clasificador: reglas deterministas con prioridad a las preguntas --------
 
 
