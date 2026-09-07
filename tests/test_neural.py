@@ -39,6 +39,22 @@ def test_merges_no_absorben_tokens_especiales():
     assert ids[-1] == 3
 
 
+def test_vocab_cubre_ascii_y_caracteres_acentuados(tmp_path):
+    # Regresión: el tokenizer perdía como <unk> cualquier carácter que no
+    # apareciera en su corpus de entrenamiento (comas, tildes, ñ, ¿ ¡).
+    tokenizer = BPETokenizer(vocab_size=128)
+    tokenizer.train(["<user>Hola<assistant>Hola sin coma<eos>"])
+    for texto in [
+        "Hola, mundo!",
+        "inteligencia artificial y éxito.",
+        "Qué difícil, ¿verdad?",
+        "Un ñandú y una cigüeña en el jardín.",
+    ]:
+        assert tokenizer.decode(tokenizer.encode(texto)) == texto, texto
+    ents = tokenizer.encode("Un chicle, qué difícil.")
+    assert 1 not in ents, "no debe quedar <unk> en español normal"
+
+
 # --- GPTModel: muestreo con máscara y corte mínimo ---------------------------
 
 

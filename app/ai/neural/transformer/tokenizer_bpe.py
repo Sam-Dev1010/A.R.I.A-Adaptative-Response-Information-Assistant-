@@ -1,11 +1,15 @@
 """Byte-Pair Encoding tokenizer — tokenize texto como GPT.
 
 Entrena pares de bytes frecuentes para crear un vocabulario efectivo.
+Las estadísticas y aplicación de merges están vectorizadas con NumPy para
+poder entrenar con corpus masivo (antes era Python puro, O(merges * tokens)).
 """
 import json
 from collections import Counter
 from pathlib import Path
 from typing import ClassVar
+
+import numpy as np
 
 
 class BPETokenizer:
@@ -19,7 +23,7 @@ class BPETokenizer:
         "<sep>": 4,
         "<user>": 5,
         "<assistant>": 6,
-        "<think>": 7,
+        " thinking": 7,
         "<action>": 8,
         "<result>": 9,
     }
@@ -30,11 +34,36 @@ class BPETokenizer:
         self.vocab: dict[str, int] = {}
         self.id_to_token: dict[int, str] = {}
         self._is_trained = False
+        self._n_special = len(self.SPECIAL_TOKENS)
+
+    # --- Helpers vectorizados (NumPy) ---------------------------------------
+
+    @staticmethod
+    def _apply_merge_np(arr: np.ndarray, a: int, b: int, new: int) -> np.ndarray:
+        """Reemplaza el par adyacente (a,b) por `new` en un arreglo de IDs."""
+        idx = np.nonzero((arr[:-1] == a) & (arr[1:] == b))[0]
+        if idx.size == 0:
+            return arr
+        keep = np.ones(idx.size, dtype=bool)
+        keep[1:] = idx[1:] > idx[:-1] + 1  # no solapar pares consecutivos
+        idx = idx[keep]
+        parts: list[np.ndarray] = []
+        prev = 0
+        for p in idx.tolist():
+            if p > prev:
+                parts.append(arr[prev:p])
+            parts.append(np.array([new], dtype=np.int64))
+            prev = int(p) + 2
+        if prev < len(arr):
+            parts.append(arr[prev:])
+        if not parts:
+            return np.array([new], dtype=np.int64)
+        return np.concatenate(parts)
 
     def _get_stats(self, ids: list[int]) -> Counter:
         """Cuenta pares de tokens adyacentes (sin fusionar tokens especiales)."""
         counts: Counter = Counter()
-        ns = len(self.SPECIAL_TOKENS)
+        ns = self._n_special
         for i in range(len(ids) - 1):
             if ids[i] >= ns and ids[i + 1] >= ns:
                 counts[(ids[i], ids[i + 1])] += 1
@@ -42,16 +71,9 @@ class BPETokenizer:
 
     def _merge(self, ids: list[int], pair: tuple[int, int], new_id: int) -> list[int]:
         """Fusiona un par de tokens en uno nuevo."""
-        new_ids = []
-        i = 0
-        while i < len(ids):
-            if i < len(ids) - 1 and ids[i] == pair[0] and ids[i + 1] == pair[1]:
-                new_ids.append(new_id)
-                i += 2
-            else:
-                new_ids.append(ids[i])
-                i += 1
-        return new_ids
+        return self._apply_merge_np(
+            np.asarray(ids, dtype=np.int64), pair[0], pair[1], new_id
+        ).tolist()
 
     def _tokenize_ids(self, text: str) -> list[int]:
         """Convierte texto a IDs, tratando los tokens especiales como atómicos."""
@@ -108,40 +130,75 @@ class BPETokenizer:
                 self.id_to_token[next_id] = char
                 next_id += 1
 
-        # Paso 2: BPE merges
-        self.merges = []
-        # Tokenizar todos los textos en IDs (especiales atómicos + bytes/merges)
-        all_ids = [self._tokenize_ids(text) for text in texts]
+        # Cobertura ASCII completa (0-127). Sin esto, cualquier carácter que
+        # no apareciera en el corpus de entrenamiento (p. ej. una coma) se
+        # tokenizaba como <unk> y desaparecía del texto al codificar/decodificar.
+        for val in range(128):
+            char = chr(val)
+            if char not in self.vocab:
+                self.vocab[char] = next_id
+                self.id_to_token[next_id] = char
+                next_id += 1
 
-        # Realizar merges hasta alcanzar vocab_size
+        # Cobertura UTF-8 completa: todo carácter (punto de código) del corpus
+        # que no esté ya en el vocabulario. Sin esto, los caracteres acentuados
+        # (á é í ó ú ñ ¿ ¡ ...) se perdían como <unk> y el modelo jamás
+        # aprendía español acentuado.
+        for text in texts:
+            for ch in text:
+                if ch not in self.vocab:
+                    self.vocab[ch] = next_id
+                    self.id_to_token[next_id] = ch
+                    next_id += 1
+
+        # Garantía de español acentuado: suplemento Latin-1 (á é í ó ú ñ ¿ ¡
+        # y demás tildes) incluso si el corpus no los contiene.
+        for val in range(0xA0, 0x100):
+            char = chr(val)
+            if char not in self.vocab:
+                self.vocab[char] = next_id
+                self.id_to_token[next_id] = char
+                next_id += 1
+
+        # Paso 2: BPE merges (vectorizado con NumPy)
+        self.merges = []
+        ns = self._n_special
+        arrays = [np.asarray(self._tokenize_ids(text), dtype=np.int64) for text in texts]
+
         num_merges = self.vocab_size - len(self.vocab)
         for merge_idx in range(num_merges):
-            stats: Counter = Counter()
-            for ids in all_ids:
-                stats.update(self._get_stats(ids))
-
-            if not stats:
+            # estadísticas de pares sobre TODO el corpus en una sola pasada
+            bound = next_id
+            pair_parts: list[np.ndarray] = []
+            for arr in arrays:
+                if len(arr) < 2:
+                    continue
+                a = arr[:-1]
+                b = arr[1:]
+                mask = (a >= ns) & (b >= ns)
+                if mask.any():
+                    pair_parts.append((a * bound + b)[mask])
+            if not pair_parts:
+                break
+            big = np.concatenate(pair_parts)
+            counts = np.bincount(big)
+            best_id = int(np.argmax(counts))
+            if counts[best_id] < 2:
                 break
 
-            best_pair = stats.most_common(1)[0]
-            if best_pair[1] < 2:
-                break
-
-            pair = best_pair[0]
-            new_id = next_id
-            next_id += 1
-
+            a_id = best_id // bound
+            b_id = best_id % bound
             pair_str = (
-                self._id_to_token_str(pair[0]),
-                self._id_to_token_str(pair[1]),
+                self.id_to_token.get(a_id, f"<{a_id}>"),
+                self.id_to_token.get(b_id, f"<{b_id}>"),
             )
             self.merges.append(pair_str)
             merged_token = pair_str[0] + pair_str[1]
-            self.vocab[merged_token] = new_id
-            self.id_to_token[new_id] = merged_token
+            self.vocab[merged_token] = next_id
+            self.id_to_token[next_id] = merged_token
 
-            # Aplicar merge a todos los textos
-            all_ids = [self._merge(ids, pair, new_id) for ids in all_ids]
+            arrays = [self._apply_merge_np(arr, a_id, b_id, next_id) for arr in arrays]
+            next_id += 1
 
             if verbose and (merge_idx + 1) % 100 == 0:
                 print(f"  Merge {merge_idx + 1}/{num_merges}: "
@@ -161,9 +218,9 @@ class BPETokenizer:
         if not self._is_trained:
             raise RuntimeError("Tokenizer no entrenado")
 
-        ids = self._tokenize_ids(text)
+        ids = np.asarray(self._tokenize_ids(text), dtype=np.int64)
 
-        # Aplicar merges en orden sobre tokens no especiales
+        # Aplicar merges en orden sobre tokens no especiales (vectorizado)
         for pair_str in self.merges:
             pair = (
                 self.vocab.get(pair_str[0], -1),
@@ -174,9 +231,9 @@ class BPETokenizer:
             new_id = self.vocab.get(pair_str[0] + pair_str[1], -1)
             if new_id == -1:
                 continue
-            ids = self._merge(ids, pair, new_id)
+            ids = self._apply_merge_np(ids, pair[0], pair[1], new_id)
 
-        return ids
+        return ids.tolist()
 
     def decode(self, ids: list[int]) -> str:
         """Decodifica IDs a texto."""
