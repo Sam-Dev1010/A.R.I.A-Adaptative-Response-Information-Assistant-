@@ -169,6 +169,26 @@ class GPTModel:
 
         return total_loss
 
+    def apply_weight_decay(self, lr: float, weight_decay: float) -> None:
+        """Decaimiento L2 sobre los pesos (no biases ni parámetros de escala).
+
+        w *= (1 - lr * wd) tras el paso SGD del backward. Regulariza el modelo
+        escalado y evita la inestabilidad/overfit en corpora pequeños.
+        """
+        if weight_decay <= 0.0:
+            return
+        alpha = 1.0 - lr * weight_decay
+        self.token_embed.weight *= alpha
+        self.pos_embed_weight *= alpha
+        self.lm_head.weight *= alpha
+        for block in self.blocks:
+            block.attn.q_proj.weight *= alpha
+            block.attn.k_proj.weight *= alpha
+            block.attn.v_proj.weight *= alpha
+            block.attn.out_proj.weight *= alpha
+            block.ff.fc1.weight *= alpha
+            block.ff.fc2.weight *= alpha
+
     def predict_next(self, token_ids: list[int]) -> tuple[int, float]:
         logits = self.forward(token_ids)
         last_logits = logits[-1]

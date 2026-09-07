@@ -196,6 +196,7 @@ class GPTTrainer:
         """Backward pass completo a través del modelo GPT."""
         lr = self.lr * (0.95 ** (self._step // 50))
         self.model.backward(target_ids, lr=lr)
+        self.model.apply_weight_decay(lr, self.weight_decay)
 
     def save_checkpoint(self, path: Path | str) -> None:
         """Guarda checkpoint del entrenamiento."""
