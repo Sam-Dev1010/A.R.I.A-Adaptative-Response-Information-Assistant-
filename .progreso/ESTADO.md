@@ -1,14 +1,14 @@
 # ESTADO ACTUAL DE A.R.I.A (canónica)
 
-Actualizado: 2026-09-07 (Sesión 3)
-Ver histórico detallado en `SESION_2026-09-07.md` y sesiones anteriores.
+Actualizado: 2026-09-09 (Sesión 4)
+Ver histórico detallado en `SESION_2026-09-09.md` y sesiones anteriores.
 
 ## Resumen ejecutivo
-ARIA funciona **al 100% en el PC** (284/284 tests) y en el ESP32. El entrenador
-del GPT local quedó vectorizado (~18x), la generación ya no colapsa a `<unk>`,
-y se protegió a ARIA contra los bucles degenerados del GPT local (guardián
-reforzado). El **modelo escalado NO se promociona** (basado en datos: sigue
-degenerando; el corpus es demasiado pequeño).
+ARIA funciona **al 100% en el PC** (285/285 tests) y en el ESP32. El
+entrenador del GPT local quedó **por lotes vectorizado ~10.3x** (B=32) con
+equivalencia bit-exacta demostrada (B=1) y batch-mean (B>1), listo para
+reentrenar con un corpus MUCHO mayor. El modelo escalado sigue SIN promocionar
+y la fase actual es de **escalado de corpus/datos**.
 
 ## Qué funciona
 - **PC completo**: cerebro neural GPT local (377,472 params, desplegado) + voz
@@ -29,15 +29,16 @@ degenerando; el corpus es demasiado pequeño).
   (talk_to_aria). Total reentrenado ≈ 210 conv + 71 textos.
 
 ## CUADRO DE MANDO — pendientes priorizados
-1. **[ALTA] Decidir futuro del GPT local**: ¿invertir en corpus MUCHO mayor
-   (miles de diálogos) o tratarlo como experimental y enfocar en lo fiable
-   (clasificador + memoria)? Datos de hoy: escalar capacidad con ~200
-   conversaciones no basta (overfit/bucles).
-2. **[MEDIA] Revisar tokenizer BPE**: merges que fragmentan palabras de forma
+1. **[ALTA] Escalar corpus**: recolectar varios MB de texto en español (Wikipedia
+   es) y reentrenar `scaled_model_v3` con el trainer por lotes (B=32, ~10x más
+   rápido). Datos: el freno del GPT local es DATA, no capacidad.
+2. **[ALTA] Decidir promoción**: validar generación del escalado (sin `<unk>` ni
+   bucles) y decidir si se despliega; si no mejora, GPT local queda experimental.
+3. **[MEDIA] Revisar tokenizer BPE**: merges que fragmentan palabras de forma
    rara ("qprogram", "Armin") que alimentan la degeneración.
-3. **[BAJA] Limpiar experimentos**: `data/scaled_model*` no están desplegados
-   (se pueden borrar).
-4. **[MEDIA] Correr pytest tras cada cambio** (hoy 284/284 OK).
+4. **[BAJA] Limpiar experimentos**: `data/scaled_model*` no desplegados.
+5. **[ALTA] Correr pytest tras cada cambio** (hoy 285/285 OK) y
+   `/tmp/equivalence_test.py` (contrato por lotes) antes de tocar trainer.
 
 ## Notas de manejo
 - `data/*` está gitignored (solo `data/.gitkeep` se versiona). Modelos y corpus
