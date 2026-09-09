@@ -9,8 +9,14 @@ import random
 import time
 from pathlib import Path
 
+import numpy as np
+
 from app.ai.neural.transformer.gpt_model import GPTModel
 from app.ai.neural.transformer.tokenizer_bpe import BPETokenizer
+from app.ai.neural.transformer.trainer_batch import (
+    backward_batched,
+    forward_batched,
+)
 
 
 class GPTTrainer:
@@ -82,20 +88,27 @@ class GPTTrainer:
         epochs: int = 3,
         batch_size: int = 4,
         max_len: int = 256,
+        stride: int = 0,
         verbose: bool = True,
     ) -> list[dict[str, float]]:
-        """Entrena con texto puro (continuation learning)."""
+        """Entrena con texto puro (continuation learning).
+
+        `stride` controla el solapamiento de las ventanas: por defecto es
+        `max_len // 2` (conserva continuidad); para corpus grandes conviene
+        `stride == max_len` (sin solapamiento, la mitad de secuencias).
+        """
         if texts and not self.tokenizer._is_trained:
             tokenizer_texts = list(texts)
             tokenizer_texts.extend(word for text in texts for word in text.split())
             self.tokenizer.train(tokenizer_texts, verbose=False)
 
+        stride = stride or (max_len // 2)
         training_sequences = []
         for text in texts:
             full_text = f"<bos>{text}<eos>"
             ids = self.tokenizer.encode(full_text)
 
-            for i in range(0, len(ids) - 1, max_len // 2):
+            for i in range(0, len(ids) - 1, stride):
                 chunk = ids[i:i + max_len]
                 if len(chunk) >= 4:
                     training_sequences.append(chunk)
@@ -111,8 +124,14 @@ class GPTTrainer:
         epochs: int,
         batch_size: int,
         verbose: bool,
+        use_batched: bool = True,
     ) -> list[dict[str, float]]:
-        """Bucle de entrenamiento sobre secuencias tokenizadas."""
+        """Bucle de entrenamiento sobre secuencias tokenizadas.
+
+        Con `use_batched` y `batch_size > 1` procesa lotes enteros a la vez
+        (mini-batch vectorizado con NumPy), mucho más rápido que secuencia a
+        secuencia. Las secuencias se agrupan por longitud para mín. padding.
+        """
         history = []
         total_params = self.model.count_params()
 
@@ -125,43 +144,35 @@ class GPTTrainer:
             epoch_total = 0
             start = time.time()
 
-            random.shuffle(sequences)
+            seqs = sorted(sequences, key=len)  # agrupar longitudes parecidas
+            batches: list[list[list[int]]] = [
+                seqs[i:i + max(batch_size, 1)] for i in range(0, len(seqs), max(batch_size, 1))
+            ]
+            random.shuffle(batches)
 
-            for batch_start in range(0, len(sequences), batch_size):
-                batch = sequences[batch_start:batch_start + batch_size]
+            for batch in batches:
+                batch = [s for s in batch if len(s) >= 3]
+                if not batch:
+                    continue
+                # Ordenar dentro del lote para reducir el padding
+                batch.sort(key=len, reverse=True)
 
-                for seq in batch:
-                    if len(seq) < 3:
-                        continue
-
-                    input_ids = seq[:-1]
-                    target_ids = seq[1:]
-
-                    # Forward
-                    logits = self.model.forward(input_ids)
-
-                    # Calcular loss
-                    loss = 0.0
-                    for i, target_id in enumerate(target_ids):
-                        if i >= len(logits):
-                            break
-                        max_l = max(logits[i])
-                        exp_l = [math.exp(v - max_l) for v in logits[i]]
-                        total_exp = sum(exp_l)
-                        prob_correct = exp_l[target_id] / total_exp
-                        loss -= math.log(prob_correct + 1e-10)
-                        predicted_class = max(range(len(logits[i])), key=lambda j: logits[i][j])
-                        if predicted_class == target_id:
-                            epoch_correct += 1
-                        epoch_total += 1
-
-                    loss /= len(target_ids)
-                    epoch_loss += loss
-
-                    # Backward simplificado: ajustar pesos proporcionalmente al error
-                    self._backward_pass(input_ids, target_ids, logits, loss)
-
-                    self._step += 1
+                if use_batched and len(batch) > 1:
+                    losses, correct, total = self._train_batch(batch)
+                    epoch_loss += float(losses) * len(batch)
+                    epoch_correct += correct
+                    epoch_total += total
+                else:
+                    for seq in batch:
+                        input_ids = seq[:-1]
+                        target_ids = seq[1:]
+                        logits = self.model.forward(input_ids)
+                        loss, correct, total = self._loss_stats(logits, target_ids)
+                        epoch_loss += loss
+                        epoch_correct += correct
+                        epoch_total += total
+                        self._backward_pass(input_ids, target_ids, logits, loss)
+                        self._step += 1
 
             avg_loss = epoch_loss / len(sequences) if sequences else 0
             accuracy = epoch_correct / epoch_total if epoch_total > 0 else 0
@@ -185,6 +196,66 @@ class GPTTrainer:
                 )
 
         return history
+
+    def _loss_stats(
+        self,
+        logits: list[list[float]],
+        target_ids: list[int],
+    ) -> tuple[float, int, int]:
+        """Loss media + aciertos sobre una secuencia (camino por secuencia)."""
+        loss = 0.0
+        correct = 0
+        total = 0
+        n = min(len(logits), len(target_ids))
+        for i in range(n):
+            target_id = target_ids[i]
+            max_l = max(logits[i])
+            exp_l = [math.exp(v - max_l) for v in logits[i]]
+            total_exp = sum(exp_l)
+            loss -= math.log(exp_l[target_id] / total_exp + 1e-10)
+            if max(range(len(logits[i])), key=lambda j: logits[i][j]) == target_id:
+                correct += 1
+            total += 1
+        loss /= n
+        return loss, correct, total
+
+    def _train_batch(self, batch: list[list[int]]) -> tuple[float, int, int]:
+        """Entrena un lote completo (pad + forward + backward vectorizados).
+
+        Devuelve (loss_media_del_lote, aciertos, total_posiciones_válidas).
+        """
+        seq_len = max(len(s) for s in batch)
+        M = min(seq_len - 1, self.model.max_seq_len)
+        tokens = np.zeros((len(batch), M), dtype=np.int64)
+        targets = np.zeros((len(batch), M), dtype=np.int64)
+        valid = np.zeros((len(batch), M), dtype=bool)
+        for i, seq in enumerate(batch):
+            n = len(seq)
+            if n - 1 > M:
+                # igual que el camino por secuencia: forward usa los últimos
+                # max_seq_len inputs y empareja con los PRIMEROS max_seq_len targets
+                row_in = seq[:-1][-M:]
+                row_tg = seq[1:][:M]
+                tokens[i, :] = row_in
+                targets[i, :] = row_tg
+                valid[i, :] = True
+            else:
+                tokens[i, :n - 1] = seq[:-1]
+                targets[i, :n - 1] = seq[1:]
+                valid[i, :n - 1] = True
+
+        logits, cache = forward_batched(self.model, tokens)
+        lr = self.lr * (0.95 ** (self._step // 50))
+        loss = backward_batched(self.model, targets, valid, cache, lr)
+        if self.weight_decay > 0:
+            self.model.apply_weight_decay(lr, self.weight_decay)
+        self._step += len(batch)
+
+        # Aciertos sobre posiciones válidas
+        pred = np.argmax(logits, axis=-1)
+        correct = int(np.sum((pred == targets) & valid))
+        total = int(valid.sum())
+        return loss, correct, total
 
     def _backward_pass(
         self,
