@@ -9,9 +9,11 @@ entrenador del GPT local quedó **por lotes vectorizado ~10.3x** (B=32) con
 equivalencia bit-exacta demostrada (B=1) y batch-mean (B>1). El corpus se
 escaló a **3.11 MB de Wikipedia es** (`data/neural/corpus_masivo.json` =
 3342 textos) y `scaled_model_v3` está reentrenándose **por lotes, reanudable
-por chunks** (5749 ventanas cacheadas). El modelo escalado sigue SIN promocionar:
-la loss aún está en el atractor ~7.69 y hace falta dar varias pasadas más.
-La fase actual es de **escalado de corpus/datos**.
+por chunks** (5749 ventanas cacheadas). **Hallazgo clave**: a lr constante bajo
+el modelo quedaba en un atractor (~7.69); con **lr inicial 1e-2 + reset de step
+por pasada** la loss bajó hasta **~6.88 (acc 5.9%)** en 11 pasadas. La
+generación aún no monta palabras (temp baja = solo espacios) →
+**NO promocionar todavía**; toca dar más pasadas (meta loss < 6.3).
 
 ## Qué funciona
 - **PC completo**: cerebro neural GPT local (377,472 params, desplegado) + voz
@@ -35,9 +37,10 @@ La fase actual es de **escalado de corpus/datos**.
   (talk_to_aria). Total reentrenado ≈ 210 conv + 71 textos.
 
 ## CUADRO DE MANDO — pendientes priorizados
-1. **[ALTA] Terminar reentrenado de `scaled_model_v3`**: dar 5-10 pasadas más con el
-   trainer por lotes (reset de `done`/`step` por pasada; lr 2e-4, B=32; ~80 min/pasada
-   en tramos de 6.5 min). Meta: loss < 7.0. Receta en `SESION_2026-09-12.md`.
+1. **[ALTA] Terminar reentrenado de `scaled_model_v3`**: más pasadas a **lr 1e-2**
+   (reset `done`/`step` por pasada; ~70 min/pasada; loss a 6.88 ya). Meta: loss
+   < 6.3 y generación que monte palabras antes de validar promoción. Receta en
+   `SESION_2026-09-12.md`.
 2. **[ALTA] Decidir promoción**: validar generación del escalado (sin `<unk>` ni
    bucles) y decidir si se despliega; si no mejora, GPT local queda experimental.
 3. **[MEDIA] Revisar tokenizer BPE**: merges que fragmentan palabras de forma
