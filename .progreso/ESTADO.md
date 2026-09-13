@@ -1,14 +1,17 @@
 # ESTADO ACTUAL DE A.R.I.A (canónica)
 
-Actualizado: 2026-09-09 (Sesión 4)
-Ver histórico detallado en `SESION_2026-09-09.md` y sesiones anteriores.
+Actualizado: 2026-09-12 (Sesión 5)
+Ver histórico detallado en `SESION_2026-09-12.md` y sesiones anteriores.
 
 ## Resumen ejecutivo
 ARIA funciona **al 100% en el PC** (285/285 tests) y en el ESP32. El
 entrenador del GPT local quedó **por lotes vectorizado ~10.3x** (B=32) con
-equivalencia bit-exacta demostrada (B=1) y batch-mean (B>1), listo para
-reentrenar con un corpus MUCHO mayor. El modelo escalado sigue SIN promocionar
-y la fase actual es de **escalado de corpus/datos**.
+equivalencia bit-exacta demostrada (B=1) y batch-mean (B>1). El corpus se
+escaló a **3.11 MB de Wikipedia es** (`data/neural/corpus_masivo.json` =
+3342 textos) y `scaled_model_v3` está reentrenándose **por lotes, reanudable
+por chunks** (5749 ventanas cacheadas). El modelo escalado sigue SIN promocionar:
+la loss aún está en el atractor ~7.69 y hace falta dar varias pasadas más.
+La fase actual es de **escalado de corpus/datos**.
 
 ## Qué funciona
 - **PC completo**: cerebro neural GPT local (377,472 params, desplegado) + voz
@@ -23,15 +26,18 @@ y la fase actual es de **escalado de corpus/datos**.
 ## Datos / modelos actuales
 - Modelo GPT desplegado: vocab 2048, embed 64, 4 heads, 2 layers, seq 256 =
   377,472 params. Reentrenado con corpus limpio.
+- Modelo experimental `scaled_model_v3`: vocab 2048, embed 128, 8 heads, 4
+  layers, seq 256 = 1,345,792 params; reentrenándose sobre `corpus_masivo.json`
+  (3342 textos / 3.11 MB) con el trainer por lotes.
 - Corpus aprendido (limpio): `data/neural/corpus.json` = **59 conversaciones +
   20 textos** (artículos completos y temas relevantes).
 - Base en código: 118 conv + 48 textos (train_neural) + 71 conv/27 textos
   (talk_to_aria). Total reentrenado ≈ 210 conv + 71 textos.
 
 ## CUADRO DE MANDO — pendientes priorizados
-1. **[ALTA] Escalar corpus**: recolectar varios MB de texto en español (Wikipedia
-   es) y reentrenar `scaled_model_v3` con el trainer por lotes (B=32, ~10x más
-   rápido). Datos: el freno del GPT local es DATA, no capacidad.
+1. **[ALTA] Terminar reentrenado de `scaled_model_v3`**: dar 5-10 pasadas más con el
+   trainer por lotes (reset de `done`/`step` por pasada; lr 2e-4, B=32; ~80 min/pasada
+   en tramos de 6.5 min). Meta: loss < 7.0. Receta en `SESION_2026-09-12.md`.
 2. **[ALTA] Decidir promoción**: validar generación del escalado (sin `<unk>` ni
    bucles) y decidir si se despliega; si no mejora, GPT local queda experimental.
 3. **[MEDIA] Revisar tokenizer BPE**: merges que fragmentan palabras de forma
