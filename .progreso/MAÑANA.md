@@ -9,22 +9,26 @@ Léeme primero y arranca sin perder tiempo. (Detalles en `SESION_2026-09-12.md`)
   loss en atractor ~7.69. Falta dar muchas pasadas para ver descenso.
 
 ## La misión de hoy
-1. **Seguir el reentrenado a lr 1e-2** (¡el que rompe el atractor!): reset
-   `done`/`step`, una pasada completa (~70 min) hasta done=5200, repetir.
-   Loss actual ~6.88 (11 pasadas). Meta: loss < 6.3.
-2. **Validar cada 2-3 pasadas**: `gen_v3.py` (`--temp 0.8`; a temp baja hoy solo
-   emite espacios → señal de que aún no hay palabras).
-3. Si se estanca o se vuelve ruidoso: revisar codificación BPE (fragmenta palabras).
-4. Decidir promoción en ESTADO (sin `<unk>`, sin bucles bigráficos).
+1. **Decidir modelo a seguir**: el BPE word-aware (4096, `new_bpe_tokenizer`)
+   gana de calle (0 unk, pérdida 5.59 tras 3 pasadas vs 6.88 en 12 del OLD),
+   pero la generación aún no monta palabras. Elegir entre:
+   - dar más pasadas a `scaled_v3_bpe4096` (lr 1e-2) hasta que las palabras
+     superen a los espacios en el muestreo, o
+   - subir capacidad (más capas/embed) con el BPE nuevo.
+2. **Validar cada 2-3 pasadas**: `gen_v3.py` adaptado o inline probe (top-tokens
+   tras "la ciudad de " → hoy p~0.001 por palabra).
+3. Seguir con pasadas del OLD (6.88) es opcional — el BPE nuevo lo supera ya.
+4. Decidir promoción en ESTADO.
 
 ## Comandos útiles (sesión entera en un comando — ver receta exacta en SESION_2026-09-12.md)
 ```bash
 source .venv/bin/activate
 python /tmp/equivalence_test.py                     # contrato por lotes (~e-15)
 pytest                                             # 285 tests
-python data/neural/harvest_masivo.py               # continuar corpus (reanudable)
-python data/neural/retrain_v3.py --max-min 68 --chunk 400 --batch 32 --lr 1e-2
-python data/neural/gen_v3.py --prompt "..." --temp 0.8 --seed 7
+python data/neural/rebuild_bpe_v3.py --vocab 4096  # re-entrenar el BPE word-aware
+python data/neural/retrain_bpe.py --tok data/neural/new_bpe_tokenizer \
+    --windows data/neural/v3_bpe4096_windows.json \
+    --out data/neural/scaled_v3_bpe4096 --vocab 4096 --max-min 95 --lr 1e-2
 ```
 
 ## Ojo (¡importante!)

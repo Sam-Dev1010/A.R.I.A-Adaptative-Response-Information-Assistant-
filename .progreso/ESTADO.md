@@ -43,8 +43,11 @@ generación aún no monta palabras (temp baja = solo espacios) →
    `SESION_2026-09-12.md`.
 2. **[ALTA] Decidir promoción**: validar generación del escalado (sin `<unk>` ni
    bucles) y decidir si se despliega; si no mejora, GPT local queda experimental.
-3. **[MEDIA] Revisar tokenizer BPE**: merges que fragmentan palabras de forma
-   rara ("qprogram", "Armin") que alimentan la degeneración.
+3. **[MEDIA→HECHA] Revisar tokenizer BPE**: reconstruido word-aware (vocab
+   4096) en `data/neural/rebuild_bpe_v3.py` → 0 `<unk>`, palabras enteras como
+   tokens. **No es ya el cuello de botella**: el limitante es entrenamiento/
+   capacidad. El BPE nuevo está en `data/neural/new_bpe_tokenizer/` y el modelo
+   de prueba en `data/neural/scaled_v3_bpe4096/` (loss 5.59 en 3 pasadas).
 4. **[BAJA] Limpiar experimentos**: `data/scaled_model*` no desplegados.
 5. **[ALTA] Correr pytest tras cada cambio** (hoy 285/285 OK) y
    `/tmp/equivalence_test.py` (contrato por lotes) antes de tocar trainer.
