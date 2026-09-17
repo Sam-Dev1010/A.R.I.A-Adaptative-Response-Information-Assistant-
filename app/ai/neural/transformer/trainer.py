@@ -28,11 +28,15 @@ class GPTTrainer:
         tokenizer: BPETokenizer,
         learning_rate: float = 3e-4,
         weight_decay: float = 0.01,
+        lr_decay: float = 0.95,
+        lr_decay_every: int = 50,
     ) -> None:
         self.model = model
         self.tokenizer = tokenizer
         self.lr = learning_rate
         self.weight_decay = weight_decay
+        self.lr_decay = lr_decay
+        self.lr_decay_every = lr_decay_every
         self._step = 0
         self._grad_accum: dict[str, float] = {}
 
@@ -219,6 +223,12 @@ class GPTTrainer:
         loss /= n
         return loss, correct, total
 
+    def _get_lr(self) -> float:
+        """lr actual según schedule (ambas ramas usan la misma fórmula)."""
+        if self.lr_decay_every <= 0 or self.lr_decay >= 1.0:
+            return self.lr
+        return self.lr * (self.lr_decay ** (self._step // self.lr_decay_every))
+
     def _train_batch(self, batch: list[list[int]]) -> tuple[float, int, int]:
         """Entrena un lote completo (pad + forward + backward vectorizados).
 
@@ -245,7 +255,7 @@ class GPTTrainer:
                 valid[i, :n - 1] = True
 
         logits, cache = forward_batched(self.model, tokens)
-        lr = self.lr * (0.95 ** (self._step // 50))
+        lr = self._get_lr()
         loss = backward_batched(self.model, targets, valid, cache, lr)
         if self.weight_decay > 0:
             self.model.apply_weight_decay(lr, self.weight_decay)
@@ -265,7 +275,7 @@ class GPTTrainer:
         loss: float,
     ) -> None:
         """Backward pass completo a través del modelo GPT."""
-        lr = self.lr * (0.95 ** (self._step // 50))
+        lr = self._get_lr()
         self.model.backward(target_ids, lr=lr)
         self.model.apply_weight_decay(lr, self.weight_decay)
 
